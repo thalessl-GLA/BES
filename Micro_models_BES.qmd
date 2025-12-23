@@ -1,0 +1,381 @@
+---
+title: "BES_Micro"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+BES_subset_panel_full_v1 <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v1.rds")
+
+df <- BES_subset_panel_full_v1
+
+rm(BES_subset_panel_full_v1)
+gc()
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"   
+
+get_wave_num2 <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available2 <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num2)))
+}
+
+make_long_with_age <- function(df,
+                               dv_base   = "immigSelf",
+                               brit_base = "britishness",
+                               time_base = "starttime",
+                               age_base  = "age"){
+
+  w_dv   <- waves_available2(df, dv_base)
+  w_brit <- waves_available2(df, brit_base)
+  w_time <- waves_available2(df, time_base)
+  w_age  <- waves_available2(df, age_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_age))
+  if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, starttime, and age.")
+
+  dv_cols   <- paste0(dv_base,   "W", waves)
+  brit_cols <- paste0(brit_base, "W", waves)
+  time_cols <- paste0(time_base, "W", waves)
+  age_cols  <- paste0(age_base,  "W", waves)
+
+  # Drop haven labels to avoid pivot_longer attribute conflicts
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),   ~ as.numeric(zap_labels(.x))),
+      across(all_of(brit_cols), ~ as.numeric(zap_labels(.x))),
+      across(all_of(age_cols),  ~ as.numeric(zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id, all_of(dv_cols), all_of(brit_cols), all_of(time_cols), all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv   = all_of(dv_base),
+      brit = all_of(brit_base),
+      age  = all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+
+
+
+# Quick sanity print
+panel_self |>
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    min_wave = min(wave),
+    max_wave = max(wave),
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE),
+    age_min = min(age, na.rm = TRUE),
+    age_max = max(age, na.rm = TRUE)
+  )
+
+
+
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# Quick sanity print
+panel_self |>
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    min_wave = min(wave),
+    max_wave = max(wave),
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE)
+  )
+
+```
+
+H1:
+
+```{r models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Model 1
+
+m1 <- feols(
+  dv ~ brit | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+m1
+
+# Model 2
+
+
+  m2 <- feols(
+    dv ~ brit + age | id + wave,
+    data = panel_self,
+    cluster = "id"
+  )
+m2
+
+```
+
+In baseline respondent fixed-effects models with wave fixed effects, increases in British national identity are associated with small but statistically precise shifts toward more restrictive immigration self-placement. The magnitude of the unconditional effect is modest, consistent with the expectation that national identity alone does not mechanically drive attitudinal change.
+
+```{r flexible wave, echo=FALSE, warning=FALSE, message=FALSE}
+
+m_wave <- feols(
+  dv ~ i(wave, brit, ref = 7) | id,
+  data = panel_self,
+  cluster = "id"
+)
+
+summary(m_wave)
+
+iplot(
+  m_wave,
+  xlab = "Wave",
+  main = "Wave-specific effect of Britishness on immigration self-placement (ref = W7)"
+)
+
+```
+
+Allowing the effect of British national identity to vary flexibly across waves reveals substantial temporal heterogeneity in the association between Britishness and immigration self-placement. As shown in Figure X and Table X, the within-individual effect of Britishness is negative in the early BES waves (W8–W10), indicating a modest association with more restrictive immigration preferences during the immediate post-referendum period. From approximately W14 through W23, however, the effect becomes strongly positive and statistically significant, peaking in W23, before attenuating and turning negative again in later waves (W26–W30). This non-monotonic pattern indicates that the influence of national identity on immigration attitudes is not temporally stable but instead varies sharply across political contexts. Importantly, these estimates are obtained from respondent fixed-effects models with age controls, ensuring that the observed variation reflects within-person changes rather than compositional differences across waves. Taken together, the results suggest that Britishness does not exert a constant influence on immigration self-placement; rather, its political relevance is episodic and context-dependent, consistent with the theoretical expectation that national identity becomes attitudinally consequential under specific macro-political and economic conditions rather than through a uniform time trend.
+
+H2:
+
+```{r income 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+INCOME_BASE <- "income"   # <-- THIS is the correct BES income measure
+
+# ---------- helpers ----------
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+# ---------- build long panel with income ----------
+make_long_with_income <- function(df,
+                                  dv_base,
+                                  brit_base,
+                                  time_base,
+                                  income_base,
+                                  age_base = NULL){
+
+  w_dv     <- waves_available(df, dv_base)
+  w_brit   <- waves_available(df, brit_base)
+  w_time   <- waves_available(df, time_base)
+  w_income <- waves_available(df, income_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_income))
+
+  if(!is.null(age_base)){
+    w_age <- waves_available(df, age_base)
+    waves <- intersect(waves, w_age)
+  }
+
+  if(length(waves) < 3){
+    stop("Too few overlapping waves across DV, britishness, time, income (and age).")
+  }
+
+  dv_cols     <- paste0(dv_base,     "W", waves)
+  brit_cols   <- paste0(brit_base,   "W", waves)
+  time_cols   <- paste0(time_base,   "W", waves)
+  income_cols <- paste0(income_base, "W", waves)
+  age_cols    <- if(!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),     ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(brit_cols),   ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(income_cols), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),    ~ as.numeric(haven::zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id,
+           all_of(dv_cols),
+           all_of(brit_cols),
+           all_of(time_cols),
+           all_of(income_cols),
+           all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv     = all_of(dv_base),
+      brit   = all_of(brit_base),
+      income = all_of(income_base),
+      age    = if(!is.null(age_base)) all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+
+# ---------- Panel A: without age ----------
+panel_income_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = NULL
+)
+
+# ---------- Panel B: with age ----------
+panel_income_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = AGE_BASE
+)
+
+# ---------- Models ----------
+# (1) Income  WITHOUT age
+m_inc_1 <- feols(
+  dv ~ brit + income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (2) Income  WITH age
+m_inc_2 <- feols(
+  dv ~ brit + income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# (3) Income moderation WITHOUT age
+m_inc_3 <- feols(
+  dv ~ brit * income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (4) Income moderation WITH age
+m_inc_4 <- feols(
+  dv ~ brit * income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+```
+
+```{r income 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_inc_1)
+summary(m_inc_2)
+summary(m_inc_3)
+summary(m_inc_4)
+```
+
+Respondent fixed-effects models indicate that British national identity retains a statistically significant within-individual association with immigration self-placement in samples restricted to respondents with observed household income. In contrast, household income itself does not exert an independent within-person effect, nor does its inclusion attenuate the estimated effect of Britishness. Introducing an interaction between income and Britishness does not improve model fit and yields no evidence that income conditions the influence of national identity on immigration attitudes. Together, these results suggest that the political relevance of Britishness is not driven by individual self-assigned income levels per se, motivating a shift from resource-based measures toward indicators of economic insecurity and exposure to risk in subsequent analyses.
+
+```{r risk 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+RISK_BASE <- "riskUnemployment"
+
+# ---------- build long panels ----------
+panel_risk_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,   # reuse function; rename later
+  age_base = NULL
+)
+
+panel_risk_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,
+  age_base = AGE_BASE
+)
+
+# Rename for clarity
+panel_risk_noage <- panel_risk_noage |>
+  dplyr::rename(risk_unemp = income)
+
+panel_risk_age <- panel_risk_age |>
+  dplyr::rename(risk_unemp = income)
+
+# ---------- Models ----------
+# (1) Main effects, no age
+m_risk_1 <- feols(
+  dv ~ brit + risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (2) Main effects, with age
+m_risk_2 <- feols(
+  dv ~ brit + risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# (3) Moderation, no age
+m_risk_3 <- feols(
+  dv ~ brit * risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (4) Moderation, with age
+m_risk_4 <- feols(
+  dv ~ brit * risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+```
+
+```{r risk 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_risk_1)
+summary(m_risk_2)
+summary(m_risk_3)
+summary(m_risk_4)
+
+```
+
+Respondent fixed-effects models show no robust evidence that perceived unemployment risk conditions the relationship between British national identity and immigration self-placement. While the interaction between Britishness and perceived unemployment risk is small and statistically insignificant across specifications, the main effect of unemployment risk becomes weakly positive at the 10% level once the interaction term is included. This marginal association is conditional on the interaction specification, not present in non-interacted models, and substantively negligible in size. Importantly, the baseline association between Britishness and immigration self-placement remains stable and precisely estimated throughout. Taken together, these results suggest that individual-level economic insecurity does not meaningfully activate national identity in shaping immigration attitudes, motivating a shift toward contextual economic conditions in subsequent analyses.
+
+*Note for myself: Why risk unemployment became positive after adding the interaction term? Because once an interaction is introduced, the main effect of unemployment risk is redefined as the effect at Britishness equal to zero; this changes the estimand and reallocates shared variance, which can produce small, conditional effects without altering the substantive conclusion. Once we include an interaction, the model no longer estimates an average effect of unemployment risk. Instead, it estimates the effect at a specific level of national identity, by default, when Britishness equals zero (take the derivative in relation to unemplrisk). Since that value is not substantively meaningful, we focus on the interaction and predicted effects rather than the main coefficient.*
