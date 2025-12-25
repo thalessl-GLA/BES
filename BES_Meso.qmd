@@ -1,0 +1,193 @@
+---
+title: "BES_Meso"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v1.rds")
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"
+
+# Meso families in your merged dataset (from your appendix)
+MESO_UNEMP_BASE    <- "unemp_rate_mean"   # APS
+MESO_CLAIM_BASE    <- "claimant_mean"     # claimant count
+MESO_INCOME_BASE   <- "income"            # ASHE earnings (residence-based median weekly pay)
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+# 1) choose waves where DV + brit + time exist (age is optional; we’ll add it if present)
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves <- Reduce(intersect, list(w_dv, w_brit, w_time))
+if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, and starttime.")
+
+# Optional: age overlap (if you want age in all models, keep intersect; otherwise we keep age where available)
+w_age <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves, w_age)
+
+# 2) build long panel for core vars (dv, brit, time, age if available)
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(BRIT_BASE, "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age) # only the waves where age exists
+)
+
+df_core <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x
+    if(inherits(x, "haven_labelled")) x <- zap_labels(x)
+    x
+  })) |>
+  select(id, any_of(core_cols))
+
+panel_long <- df_core |>
+  pivot_longer(
+    cols = -id,
+    names_to = c(".value","wave"),
+    names_pattern = "(.+)W(\\d+)$"
+  ) |>
+  mutate(
+    wave = as.integer(wave),
+    starttime_chr = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(
+    dv   = all_of(DV_BASE),
+    brit = all_of(BRIT_BASE),
+    age  = all_of(AGE_BASE)
+  ) |>
+  mutate(
+    dv   = as.numeric(dv),
+    brit = as.numeric(brit),
+    age  = as.numeric(age)
+  ) |>
+  filter(!is.na(dv), !is.na(brit), !is.na(wave))
+
+# 3) helper to bring MESO wide -> long and left_join
+make_meso_long <- function(df, base, out_name, waves_keep){
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if(length(cols) == 0) return(NULL)
+
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+
+  if(nrow(tmp) == 0) return(NULL)
+
+  use_cols <- tmp$col
+
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols), ~ as.numeric(if(inherits(.x,"haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      values_to = out_name,
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave))
+}
+
+# 4) add meso vars
+meso_unemp   <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim   <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income  <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_meso <- panel_long
+if(!is.null(meso_unemp))  panel_meso <- left_join(panel_meso, meso_unemp,  by = c("id","wave"))
+if(!is.null(meso_claim))  panel_meso <- left_join(panel_meso, meso_claim,  by = c("id","wave"))
+if(!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = c("id","wave"))
+
+
+# ==========================================================
+# MAIN MESO MODELS (fixed effects)
+# id FE + wave FE, clustered by id
+# ==========================================================
+
+# We will run 2 blocks per meso family:
+# A) Main effects: brit + meso (+ age optional)
+# B) Moderation: brit * meso (+ age optional)
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u <- panel_meso |> filter(!is.na(unemp_rate_mean))
+
+m_u1 <- feols(dv ~ brit + unemp_rate_mean        | id + wave, data = panel_u, cluster = "id")
+m_u2 <- feols(dv ~ brit + unemp_rate_mean + age  | id + wave, data = panel_u, cluster = "id")
+m_u3 <- feols(dv ~ brit * unemp_rate_mean        | id + wave, data = panel_u, cluster = "id")
+m_u4 <- feols(dv ~ brit * unemp_rate_mean + age  | id + wave, data = panel_u, cluster = "id")
+
+# ---------- CLAIMANT COUNT ----------
+panel_c <- panel_meso |> filter(!is.na(claimant_mean))
+
+m_c1 <- feols(dv ~ brit + claimant_mean         | id + wave, data = panel_c, cluster = "id")
+m_c2 <- feols(dv ~ brit + claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
+m_c3 <- feols(dv ~ brit * claimant_mean         | id + wave, data = panel_c, cluster = "id")
+m_c4 <- feols(dv ~ brit * claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i <- panel_meso |> filter(!is.na(income_meso))
+
+m_i1 <- feols(dv ~ brit + income_meso           | id + wave, data = panel_i, cluster = "id")
+m_i2 <- feols(dv ~ brit + income_meso + age     | id + wave, data = panel_i, cluster = "id")
+m_i3 <- feols(dv ~ brit * income_meso           | id + wave, data = panel_i, cluster = "id")
+m_i4 <- feols(dv ~ brit * income_meso + age     | id + wave, data = panel_i, cluster = "id")
+
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# 5) sanity: coverage conditional on DV/brit being observed
+coverage <- panel_meso |>
+  summarise(
+    n_obs = n(),
+    pct_unemp_nonmiss  = mean(!is.na(unemp_rate_mean)),
+    pct_claim_nonmiss  = mean(!is.na(claimant_mean)),
+    pct_inc_nonmiss    = mean(!is.na(income_meso)),
+    pct_age_nonmiss    = mean(!is.na(age))
+  )
+print(coverage)
+```
+
+```{r meso models summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+# 6) Print model summaries (compact)
+list(
+  unemp_main_noage = m_u1,
+  unemp_main_age   = m_u2,
+  unemp_int_noage  = m_u3,
+  unemp_int_age    = m_u4,
+  claimant_main_noage = m_c1,
+  claimant_main_age   = m_c2,
+  claimant_int_noage  = m_c3,
+  claimant_int_age    = m_c4,
+  income_main_noage = m_i1,
+  income_main_age   = m_i2,
+  income_int_noage  = m_i3,
+  income_int_age    = m_i4
+) |> lapply(\(m) fixest::coeftable(m))
+
+
+
+```
