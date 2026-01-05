@@ -1,0 +1,87 @@
+---
+title: "Ethnic/Civic Nationalism BES Wave 11"
+format: html
+editor: visual
+---
+
+```{r, echo=FALSE, include=FALSE, message=FALSE, warning=FALSE}
+
+library(haven)
+library(dplyr)
+library(psych)
+library(GPArotation)
+
+BES <- read_sav("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES2024_W30_Panel_v30.0.sav")
+
+# Raw items
+ethnic_items <- c(
+  "britBornHereW11",
+  "britCitizenW11",
+  "britLiveHereW11",
+  "britChristianW11"
+)
+
+civic_items <- c(
+  "britSpeakEnglishW11",
+  "britCustomsW11",
+  "britRespectLawW11",
+  "britFeelBritishW11"
+)
+
+nat_items <- c(ethnic_items, civic_items)
+
+# Prepare data for analysis
+nat11 <- BES %>%
+  select(all_of(nat_items)) %>%
+  mutate(across(everything(), ~ ifelse(. %in% c(9999, 8888), NA, as.numeric(.))))
+
+```
+
+```{r corr/factors,echo=FALSE, include=FALSE, message=FALSE, warning=FALSE}
+
+cor_matrix <- cor(nat11, use = "pairwise.complete.obs")
+
+fa_parall <- fa.parallel(nat11, fa = "fa")
+
+efa_nat <- fa(
+  nat11,
+  nfactors = 2,
+  rotate = "oblimin",
+  fm = "ml"
+)
+
+factor_scores <- factor.scores(nat11, efa_nat, method = "regression")$scores
+
+```
+
+Wave 11 of the British Election Study Internet Panel contains the most detailed battery on national identity across the entire series, providing a unique opportunity to distinguish empirically between ethnic and civic conceptions of British nationalism. This wave includes eight items measuring beliefs about who counts as “truly British,” with four indicators reflecting ethnic criteria (being born in Britain, holding British citizenship, having lived in Britain, and being Christian) and four reflecting civic criteria (speaking English, respecting British laws, following British customs, and feeling British). These items, collected simultaneously in a single fieldwork period, allow for a consistent latent-structure analysis free from cross-wave measurement noise.
+
+The goal of this brief report is to examine the empirical structure of these nationalism indicators in Wave 11, assess whether they cluster into distinct latent dimensions, and extract reliable factor scores. These scores will be used in subsequent analyses to test how different forms of national identity interact with economic conditions in shaping attitudes toward immigration.
+
+```{r corr,  message=FALSE, warning=FALSE}
+
+cor(nat11, use = "pairwise.complete.obs")
+```
+
+The four ethnic nationalism items: *born in Britain*, *live in Britain*, *citizen of Britain*, and *Christian*, exhibit moderate to strong positive correlations with one another (0.27 to 0.7), indicating that they tap a shared underlying construct centered on origin-based and ascriptive membership criteria. Similarly, the four civic nationalism items: *speak English*, *follow British customs*, *respect British law*, and *feel British*, also correlate moderately among themselves (0.39 to 0.5), reflecting a distinct dimension based on behavioral and norms-based criteria. Cross-cluster correlations are consistently weaker: ethnic items correlate with civic items in the 0.17 to 0.41 range, suggesting related but clearly separable constructs. Overall, the correlation structure shows two internally cohesive clusters with weaker between-cluster associations, providing strong initial evidence for a two-dimensional latent structure that distinguishes ethnic from civic conceptions of national identity in the BES wave 11.
+
+```{r fa1,  message=FALSE, warning=FALSE, echo=FALSE}
+
+fa.parallel(nat11, fa = "fa")
+```
+
+The parallel analysis compares the observed eigenvalues of the nationalism items with those obtained from random data of the same size. The first observed factor shows a large eigenvalue (\> 3), and the second also exceeds the simulated benchmark, indicating two clearly meaningful latent dimensions. Although the procedure formally flags up to four factors as exceeding the resampled eigenvalues, the third and fourth eigenvalues are extremely small and are only marginally above the noise threshold. Given the negligible variance explained by the third and fourth factors and the strong theoretical expectation of an ethnic–civic distinction, we can interpret the parallel analysis as supporting the retention of a two-factor solution.
+
+```{r fa2,  message=FALSE, warning=FALSE, echo=FALSE}
+
+fa(
+  nat11,
+  nfactors = 2,
+  rotate = "oblimin",
+  fm = "ml"
+)
+```
+
+The two-factor maximum likelihood EFA with oblimin rotation provides a strong and theoretically coherent representation of the Wave-11 nationalism items. The model shows balanced factor strengths, with Factor 1 (ML1) and Factor 2 (ML2) showing nearly identical SS loadings (1.94 and 1.97, respectively) and each explaining roughly one quarter of total variance (24% and 25%). Combined, the two factors account for 49% of the variance in the eight indicators. The correlation between the two latent dimensions is moderate (0.57), indicating that ethnic and civic conceptions of national identity are related but empirically distinct constructs.
+
+Model fit indices further confirm the adequacy of the two-factor solution. Residuals are low (0.03 and 0.04), and the Tucker–Lewis Index ( 0.951) indicates good fit. Measures of factor score adequacy also indicate high reliability. Regression-based scores correlate strongly with the latent factors 0.92 and 0.89 for ML1 and ML2, repectively, with high R² values. Overall, the EFA provides clear evidence for two interpretable and well-behaved latent dimensions corresponding to ethnic and civic nationalism.

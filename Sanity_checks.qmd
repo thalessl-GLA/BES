@@ -15,11 +15,11 @@ execute:
 
 This appendix aims to verify whether the relationship between national identity and attitudes toward immigration (ATI) is temporally stable, before introducing economic moderators. Specifically, we examine whether ATI varies over time as a function of national identity, as formalised by an interaction between Britishness and time.
 
-The analytical strategy proceeds in three steps. First, we estimate respondent fixed-effects models interacting Britishness with calendar time to test for monotonic temporal drift in the nationalism–ATI relationship. Second, we estimate more flexible specifications that allow the effect of Britishness to vary freely across survey waves, capturing non-linear or big events changes. Third, we estimate identical temporal-stability checks across alternative ATI measures as a robustness exercise, while treating immigration self-placement (`immigSelf`) as the primary outcome given its substantially broader temporal coverage and superior suitability for longitudinal analysis.
+The analytical strategy proceeds in three steps. First, I estimate respondent fixed-effects models interacting Britishness with calendar time to test for monotonic temporal drift in the nationalism–ATI relationship. Second, I estimate more flexible specifications that allow the effect of Britishness to vary freely across survey waves, capturing non-linear or big events changes. Third, identical temporal-stability checks across alternative ATI measures as a robustness exercise, while treating immigration self-placement (`immigSelf`) as the primary outcome given its substantially broader temporal coverage and superior suitability for longitudinal analysis.
 
 All models are estimated using the `feols()` function from the **fixest** package. This estimator implements linear fixed-effects models using the within transformation, efficiently absorbing respondent-specific fixed effects without explicitly including thousands of dummy variables. Respondent fixed effects ensure that identification relies exclusively on within-individual variation over time, netting out all time-invariant characteristics such as baseline ideology, demographics, or long-run identity traits. Standard errors are clustered at the respondent level, allowing for arbitrary heteroskedasticity and serial correlation within individuals over time. This estimation strategy is well established in applied panel-data research and is particularly appropriate for assessing temporal stability in longitudinal survey data.
 
-```{r 0}
+```{r 0, warning=FALSE, message=FALSE, echo=FALSE, echo=FALSE}
 
 library(dplyr)
 library(tidyr)
@@ -72,7 +72,7 @@ filter(!is.na(.data[[outcome_base]]),
 
 1\. Economic ATI: Britishness × time
 
-```{r 1}
+```{r 1, warning=FALSE, message=FALSE, echo=FALSE}
 panel_econ <- make_long_panel(BES, "immigEcon")
 
 m_econ_time <- feols(
@@ -85,11 +85,11 @@ summary(m_econ_time)
 
 ```
 
-This model estimates the within-respondent relationship between national identity and economic attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The inclusion of individual fixed effects ensures that identification relies exclusively on within-person change over time, netting out all time-invariant characteristics. The model is estimated on a large panel of 517,299 observations covering 82,988 respondents. While the overall fit is high due to the absorption of stable individual differences (adjusted R² = 0.72), the within-respondent explanatory power of the model is very limited (within R² = 0.003). This indicates that temporal variation explains only a small share of changes in economic ATI within individuals. Importantly, this pattern is consistent with the interpretation that the association between Britishness and economic immigration attitudes is broadly stable over time, rather than driven by secular temporal drift, motivating the analysis of contextual moderators in subsequent models.
+This model estimates the within-respondent relationship between national identity and economic attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The inclusion of individual fixed effects ensures that identification relies exclusively on within-person change over time, netting out all time-invariant characteristics. The model is estimated on a large panel of 82,988 respondents. While the overall fit is high due to the absorption of stable individual differences (adjusted R² = 0.72), the within-respondent explanatory power of the model is very limited (within R² = 0.003). This indicates that temporal variation explains only a small share of changes in economic ATI within individuals. Importantly, this pattern is consistent with the interpretation that the association between Britishness and economic immigration attitudes is broadly stable over time, rather than driven by secular temporal drift, motivating the analysis of contextual moderators in subsequent models.
 
 2\. Economic ATI: Britishness × wave (flexible)
 
-```{r 2}
+```{r 2, warning=FALSE, message=FALSE, echo=FALSE}
 
 m_econ_wave <- feols(
 immigEcon ~ i(wave, britishness) | id,
@@ -105,7 +105,7 @@ This specification allows the effect of Britishness on economic attitudes toward
 
 3\. Cultural ATI: Britishness × time
 
-```{r 3}
+```{r 3, warning=FALSE, message=FALSE, echo=FALSE}
 
 panel_cult <- make_long_panel(BES, "immigCultural")
 
@@ -119,11 +119,11 @@ summary(m_cult_time)
 
 ```
 
-This model examines the within-respondent relationship between national identity and cultural attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The analysis is based on 355,926 observations from 71,802 respondents. As in the other specifications, individual fixed effects absorb stable personal characteristics, yielding a high adjusted R² (0.76). However, the within-respondent explanatory power remains modest (within R² = 0.022), indicating that calendar time and its interaction with Britishness account for only a limited share of changes in cultural ATI within individuals. This suggests that, while the nationalism–cultural ATI relationship may evolve gradually over time, it does not exhibit strong mechanical drift, reinforcing the interpretation that temporal variation is relatively constrained and likely shaped by contextual factors rather than by time itself.
+This model examines the within-respondent relationship between national identity and cultural attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The analysis is based on 71,802 respondents. As in the other specifications, individual fixed effects absorb stable personal characteristics, yielding a high adjusted R² (0.76). However, the within-respondent explanatory power remains modest (within R² = 0.022), indicating that calendar time and its interaction with Britishness account for only a limited share of changes in cultural ATI within individuals. This suggests that, while the nationalism–cultural ATI relationship may evolve gradually over time, it does not exhibit strong mechanical drift, reinforcing the interpretation that temporal variation is relatively constrained and likely shaped by contextual factors rather than by time itself.
 
 4\. Immigration preference: Britishness × time
 
-```{r 4}
+```{r 4, warning=FALSE, message=FALSE, echo=FALSE}
 
 panel_self <- make_long_panel(BES, "immigSelf")
 
@@ -143,4 +143,4 @@ iplot(
 
 ```
 
-Focusing on immigration self-placement (`immigSelf`), the outcome with the most extensive temporal coverage, the fixed-effects models indicate meaningful but non-monotonic variation in the relationship between national identity and immigration preferences over time. While the overall within-individual explanatory power of the model is obviously small (within R² = 0.057), the wave-specific estimates reveal substantial heterogeneity in the strength of the Britishness effect across survey waves. As illustrated in the wave-interaction plot, the association between Britishness and restrictive immigration preferences intensifies in specific mid-period waves before attenuating in later waves, without exhibiting a persistent upward or downward trend. This pattern suggests episodic reinforcement rather than secular drift, consistent with the interpretation that changes in the nationalism–ATI relationship are driven by context-specific political or economic conditions rather than by time itself.
+Focusing on immigration self-placement (`immigSelf`), the outcome with the most extensive temporal coverage, the fixed-effects models indicate meaningful but non-monotonic variation in the relationship between national identity and immigration preferences over time. While the overall within-individual explanatory power of the model is small (within R² = 0.057), the wave-specific estimates reveal substantial heterogeneity in the strength of the Britishness effect across survey waves. As illustrated in the wave-interaction plot, the association between Britishness and restrictive immigration preferences intensifies in specific mid-period waves before attenuating in later waves, without exhibiting a persistent upward or downward trend. This pattern suggests episodic reinforcement rather than secular drift, consistent with the interpretation that changes in the nationalism–ATI relationship are driven by context-specific political or economic conditions rather than by time itself.

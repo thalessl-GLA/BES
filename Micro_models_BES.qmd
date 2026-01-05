@@ -82,9 +82,9 @@ make_long_with_age <- function(df,
 }
 
 panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+```
 
-
-
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
 # Quick sanity print
 panel_self |>
   summarise(
@@ -97,23 +97,6 @@ panel_self |>
     age_min = min(age, na.rm = TRUE),
     age_max = max(age, na.rm = TRUE)
   )
-
-
-
-```
-
-```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
-# Quick sanity print
-panel_self |>
-  summarise(
-    n_obs = n(),
-    n_ids = n_distinct(id),
-    min_wave = min(wave),
-    max_wave = max(wave),
-    min_year = min(year, na.rm = TRUE),
-    max_year = max(year, na.rm = TRUE)
-  )
-
 ```
 
 H1:

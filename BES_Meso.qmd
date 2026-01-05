@@ -170,6 +170,10 @@ coverage <- panel_meso |>
 print(coverage)
 ```
 
+The objective is to assess whether constituency-level economic context, captured through official Office for National Statistics (ONS) indicators such as unemployment rates, claimant counts, and local earnings, shapes anti-immigration attitudes, and whether these contextual effects are conditioned by individual-level national identification. The meso analyses allows us to examine whether individual perceptions of economic insecurity are mirrored by objectively measured local economic conditions. For a brief description of the meso-level variables, [click here](#meso-vars).
+
+All models are estimated using linear fixed-effects regressions that include individual fixed effects and wave fixed effects. Individual fixed effects control for all time-invariant respondent characteristics, including stable ideological predispositions, cohort effects, and baseline nationalism, ensuring that identification comes exclusively from within-person change over time. Wave fixed effects absorb common national shocks and period-specific influences, such as Brexit milestones, macroeconomic cycles, and the COVID-19 pandemic, thereby isolating the impact of local economic variation net of nationwide trends. Standard errors are clustered at the individual level. Clustering by respondent accounts for serial correlation and heteroskedasticity arising from repeated observations of the same individuals across waves, which is the primary source of dependence in the data.
+
 ```{r meso models summaries, echo=FALSE, warning=FALSE, message=FALSE}
 
 # 6) Print model summaries (compact)
@@ -191,3 +195,46 @@ list(
 
 
 ```
+
+## Meso-level analysis {.tabset}
+
+### Results
+
+We estimate a sequence of meso-level fixed-effects models to assess whether objectively measured local economic conditions shape anti-immigration attitudes, and whether these effects are conditioned by individual national identification. For each meso indicator, we proceed in two steps. First, we estimate a baseline specification including the meso variable as a main effect alongside Britishness, controlling for individual and wave fixed effects. Second, we introduce an interaction between the meso indicator and Britishness to test whether the attitudinal impact of local economic context varies by the strength of national identification. All models are estimated using the `feols` function, which efficiently implements linear fixed-effects regressions with high-dimensional fixed effects and clustered standard errors.
+
+The inclusion of individual fixed effects ensures that estimates are identified exclusively from within-person changes over time, net of all time-invariant characteristics such as baseline ideology, cohort membership, or stable nationalist dispositions. Wave fixed effects absorb national-level shocks and common temporal trends, including major political and economic events. Standard errors are clustered at the individual level to account for serial correlation in repeated observations of the same respondents across waves. This strategy yields conservative estimates and allows a clean interpretation of meso-level effects as changes in local context associated with changes in attitudes within the same individuals.
+
+#### Local unemployment rate
+
+Across the baseline specifications, the local unemployment rate exhibits no statistically significant main effect on anti-immigration attitudes, once individual and wave fixed effects are included. This indicates that changes in constituency-level unemployment are not, on average, associated with within-person changes in immigration attitudes when considered independently. However, once the interaction between unemployment and Britishness is introduced, a clear pattern emerges. Higher local unemployment is positively associated with anti-immigration attitudes among respondents with low levels of Britishness, while the interaction term is negative and statistically significant, indicating that this effect attenuates—and eventually reverses—as national identification increases. In other words, economic distress at the local level appears to heighten anti-immigration sentiment primarily among individuals with weaker national identification, while strongly British respondents are comparatively insulated from local economic conditions. This pattern is robust to the inclusion of age and mirrors the moderation structure observed in the micro-level analyses.
+
+#### Claimant count
+
+Results for claimant count closely parallel those for the unemployment rate. In models including only main effects, claimant intensity shows no independent association with anti-immigration attitudes once individual and wave fixed effects are accounted for. However, when interacted with Britishness, claimant count becomes substantively meaningful. Higher claimant levels are associated with increased anti-immigration attitudes among respondents with lower Britishness, while the negative and statistically significant interaction term indicates that this association weakens as national identification strengthens. The consistency of this moderation pattern across specifications, including those controlling for age, suggests that objective indicators of local welfare dependency shape immigration attitudes in a conditional manner, reinforcing the idea that national identity moderates how economic context is interpreted politically.
+
+#### Local income (meso)
+
+In contrast to unemployment and claimant indicators, local income does not exhibit either a significant main effect or a statistically meaningful interaction with Britishness. Neither the baseline nor the interaction specifications provide evidence that changes in constituency-level income are associated with within-person changes in immigration attitudes. This null result is consistent across models with and without age controls. Substantively, this suggests that short-run fluctuations in local income levels, at least as measured at the constituency level, are less salient for shaping immigration attitudes than indicators directly linked to labour market insecurity and welfare dependence. The absence of a moderating effect further indicates that income-based contextual variation does not interact with national identification in the same way as unemployment-related measures.
+
+::: {.callout-note}
+**Interpretive note.**  
+Each additional unit of Britishness weakens the effect of unemployment and claimant intensity on anti-immigration attitudes. These meso-economic effects are substantively meaningful only at low levels of national identification and converge to zero as Britishness increases.
+:::
+
+### Description of meso variables {#meso-vars}
+
+The meso-level indicators used in the analysis capture objective local economic conditions at the level of UK parliamentary constituencies. All meso variables are derived from official Office for National Statistics (ONS) sources, merged to the BES panel using constituency code × fieldwork year, and then reshaped to match the wave-based structure of the survey. They are intended to proxy different dimensions of local economic context that may shape attitudes toward immigration.
+
+**Local unemployment rate (APS).**
+
+This variable measures the mean unemployment rate in each parliamentary constituency, constructed from the Annual Population Survey (APS) Local Labour Market Indicators. The APS unemployment rate reflects the share of economically active individuals who are unemployed, based on rolling survey windows. For each BES wave, APS data are collapsed to the relevant fieldwork year, producing a constituency-level unemployment rate that captures local labour market conditions rather than individual employment status. This measure is used as a core indicator of local economic insecurity and labour market stress.
+
+**Claimant count.**
+
+The claimant count variable measures the mean number of benefit claimants in each constituency, based on ONS claimant count statistics. These data capture the number of individuals claiming unemployment-related benefits (such as Jobseeker’s Allowance or Universal Credit) and are available at monthly frequency. Monthly values are aggregated to yearly constituency-level means (and medians in robustness checks). Compared to the unemployment rate, claimant count reflects a more administrative and welfare-based dimension of economic hardship, closely tied to benefit dependency and visible economic distress.ss.
+
+**Local income (ASHE).**
+
+Local income is measured using median weekly gross pay from the Annual Survey of Hours and Earnings (ASHE), residence-based and covering all working patterns and sexes. The variable captures the typical earnings level of residents within each constituency and is merged to the BES panel by constituency and year. Unlike unemployment and claimant indicators, this income measure reflects general economic prosperity rather than labour market risk or insecurity, and varies more slowly over time at the constituency level.
+
+------------------------------------------------------------------------
