@@ -1,0 +1,400 @@
+---
+title: "Adittional Regressions - Meso"
+format: html
+editor: visual
+---
+
+```{r meso_nat_dv, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v1.rds")
+
+# ==============================
+# NEW SPECIFICATION (Comment 1)
+# ==============================
+DV_BASE    <- "britishness"   # nationalism as DV
+ATI_BASE   <- "immigSelf"     # ATI as predictor/control
+TIME_BASE  <- "starttime"
+AGE_BASE   <- "age"
+
+# Meso families (same as BES_Meso)
+MESO_UNEMP_BASE   <- "unemp_rate_mean"   # APS
+MESO_CLAIM_BASE   <- "claimant_mean"     # claimant count
+MESO_INCOME_BASE  <- "income"            # ASHE earnings (residence-based median weekly pay)
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+# 1) choose waves where DV + ATI + time exist
+w_dv   <- waves_available(df, DV_BASE)
+w_ati  <- waves_available(df, ATI_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves <- Reduce(intersect, list(w_dv, w_ati, w_time))
+if(length(waves) < 3) stop("Too few overlapping waves across DV (britishness), ATI, and starttime.")
+
+# Optional: age overlap
+w_age <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves, w_age)
+
+# 2) build long panel for core vars (dv, ati, time, age if available)
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(ATI_BASE,  "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age)
+)
+
+df_core <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x
+    if(inherits(x, "haven_labelled")) x <- zap_labels(x)
+    x
+  })) |>
+  select(id, any_of(core_cols))
+
+panel_long <- df_core |>
+  pivot_longer(
+    cols = -id,
+    names_to = c(".value","wave"),
+    names_pattern = "(.+)W(\\d+)$"
+  ) |>
+  mutate(
+    wave = as.integer(wave),
+    starttime_chr = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(
+    dv    = all_of(DV_BASE),   # britishness
+    immig = all_of(ATI_BASE),  # ATI predictor
+    age   = all_of(AGE_BASE)
+  ) |>
+  mutate(
+    dv    = as.numeric(dv),
+    immig = as.numeric(immig),
+    age   = as.numeric(age)
+  ) |>
+  filter(!is.na(dv), !is.na(immig), !is.na(wave))
+
+# 3) helper to bring MESO wide -> long and left_join (unchanged)
+make_meso_long <- function(df, base, out_name, waves_keep){
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if(length(cols) == 0) return(NULL)
+
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+
+  if(nrow(tmp) == 0) return(NULL)
+
+  use_cols <- tmp$col
+
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols), ~ as.numeric(if(inherits(.x,"haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      values_to = out_name,
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave))
+}
+
+# 4) add meso vars (unchanged)
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_meso_nat <- panel_long
+if(!is.null(meso_unemp))  panel_meso_nat <- left_join(panel_meso_nat, meso_unemp,  by = c("id","wave"))
+if(!is.null(meso_claim))  panel_meso_nat <- left_join(panel_meso_nat, meso_claim,  by = c("id","wave"))
+if(!is.null(meso_income)) panel_meso_nat <- left_join(panel_meso_nat, meso_income, by = c("id","wave"))
+
+# ==========================================================
+# NEW MESO MODELS: DV = britishness (nationalism)
+# id FE + wave FE, clustered by id
+# Controls: ATI (immig), (+ age optional)
+# ==========================================================
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u_nat <- panel_meso_nat |> filter(!is.na(unemp_rate_mean))
+
+m_u_nat1 <- feols(dv ~ immig + unemp_rate_mean        | id + wave, data = panel_u_nat, cluster = "id")
+m_u_nat2 <- feols(dv ~ immig + unemp_rate_mean + age  | id + wave, data = panel_u_nat, cluster = "id")
+m_u_nat3 <- feols(dv ~ immig * unemp_rate_mean        | id + wave, data = panel_u_nat, cluster = "id")
+m_u_nat4 <- feols(dv ~ immig * unemp_rate_mean + age  | id + wave, data = panel_u_nat, cluster = "id")
+
+
+# ---------- CLAIMANT COUNT ----------
+panel_c_nat <- panel_meso_nat |> filter(!is.na(claimant_mean))
+
+m_c_nat1 <- feols(dv ~ immig + claimant_mean         | id + wave, data = panel_c_nat, cluster = "id")
+m_c_nat2 <- feols(dv ~ immig + claimant_mean + age   | id + wave, data = panel_c_nat, cluster = "id")
+m_c_nat3 <- feols(dv ~ immig * claimant_mean        | id + wave, data = panel_c_nat, cluster = "id")
+m_c_nat4 <- feols(dv ~ immig * claimant_mean + age  | id + wave, data = panel_c_nat, cluster = "id")
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i_nat <- panel_meso_nat |> filter(!is.na(income_meso))
+
+m_i_nat1 <- feols(dv ~ immig + income_meso           | id + wave, data = panel_i_nat, cluster = "id")
+m_i_nat2 <- feols(dv ~ immig + income_meso + age     | id + wave, data = panel_i_nat, cluster = "id")
+m_i_nat3 <- feols(dv ~ immig * income_meso        | id + wave, data = panel_i_nat, cluster = "id")
+m_i_nat4 <- feols(dv ~ immig * income_meso + age  | id + wave, data = panel_i_nat, cluster = "id")
+
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# 5) sanity: coverage conditional on DV/brit being observed
+coverage <- panel_meso_nat |>
+  summarise(
+    n_obs = n(),
+    pct_unemp_nonmiss  = mean(!is.na(unemp_rate_mean)),
+    pct_claim_nonmiss  = mean(!is.na(claimant_mean)),
+    pct_inc_nonmiss    = mean(!is.na(income_meso)),
+    pct_age_nonmiss    = mean(!is.na(age))
+  )
+print(coverage)
+```
+
+The objective of this section is to assess whether constituency-level economic context, captured through official Office for National Statistics (ONS) indicators such as unemployment rates, claimant counts, and local earnings, is associated with within-individual change in national identification. By reversing the outcome relative to the main meso analyses, we evaluate whether objectively measured local economic conditions directly shape levels of national attachment, rather than conditioning the political expression of identity in attitudes toward immigration. This specification serves as a diagnostic test of the stability of nationalism: if national identification functions as a relatively durable predisposition, then short-term variation in local economic context should not systematically translate into changes in Britishness. For a brief description of the meso-level variables, [click here](#meso-vars).
+
+All models are estimated using linear fixed-effects regressions that include individual fixed effects and wave fixed effects. Individual fixed effects absorb all time-invariant respondent characteristics, including stable ideological orientations, cohort membership, and baseline levels of national identification, ensuring that estimates are identified exclusively from within-person change over time. Wave fixed effects capture common national shocks and period-specific influences, such as Brexit-related events, macroeconomic cycles, and the COVID-19 pandemic, thereby isolating variation in local economic context net of nationwide trends. Standard errors are clustered at the individual level to account for serial correlation arising from repeated observations of the same respondents across waves. Because national identification is treated as the outcome in these models, interaction terms between immigration attitudes and meso-level economic indicators are interpreted as conditioning the co-movement between attitudes and identity, rather than as evidence of contextual activation of nationalism. Accordingly, these interaction specifications are presented as robustness and diagnostic checks, not as tests of the core moderation hypotheses developed in the main meso analysis.
+
+```{r meso models summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+# 6) Print model summaries (compact)
+list(
+  unemp_main_noage = m_u_nat1,
+  unemp_main_age   = m_u_nat2,
+  unemp_int_noage  = m_u_nat3,
+  unemp_int_age    = m_u_nat4,
+  claimant_main_noage = m_c_nat1,
+  claimant_main_age   = m_c_nat2,
+  claimant_int_noage  = m_c_nat3,
+  claimant_int_age    = m_c_nat4,
+  income_main_noage = m_i_nat1,
+  income_main_age   = m_i_nat2,
+  income_int_noage  = m_i_nat3,
+  income_int_age    = m_i_nat4
+) |> lapply(\(m) fixest::coeftable(m))
+
+
+
+```
+
+## Meso-level analysis {.tabset}
+
+### Results
+
+We estimate a sequence of meso-level fixed-effects models to assess whether objectively measured local economic conditions are associated with within-individual change in national identification. Using official ONS indicators, e.g. constituency-level unemployment rates, claimant counts, and local earnings, we examine whether variation in local economic context directly shapes levels of British national identity over time. For each meso indicator, we proceed in two steps. First, I estimate a baseline specification in which national identification is regressed on the meso-level economic indicator, controlling for immigration attitudes as well as individual and wave fixed effects. Second, I introduce an interaction between the meso indicator and immigration attitudes to assess whether local economic context conditions the *co-movement* between national identification and attitudes toward immigration. These interaction models are interpreted as diagnostic tests of contextual heterogeneity rather than as evidence of identity activation. All models are estimated using the `feols` function, which efficiently implements linear fixed-effects regressions with high-dimensional fixed effects and clustered standard errors.
+
+The inclusion of individual fixed effects ensures that estimates are identified exclusively from within-person changes over time, net of all time-invariant characteristics such as baseline ideological orientations, cohort membership, and stable components of national identity. Wave fixed effects absorb common national shocks and period-specific influences, including major political events, macroeconomic cycles, and the COVID-19 pandemic. Standard errors are clustered at the individual level to account for serial correlation arising from repeated observations of the same respondents across waves. This modeling strategy yields conservative estimates and allows a clean interpretation of meso-level economic variation as being associated with changes in national identification or with changes in the strength of attitudinal–identity alignment within the same individuals, rather than with cross-sectional differences between respondents.
+
+#### Local unemployment rate
+
+Respondent fixed-effects models provide no evidence that constituency-level unemployment rates are directly associated with within-individual changes in national identification. In the main-effects specifications, local unemployment exhibits no statistically meaningful association with Britishness, and this null result is unchanged by the inclusion of age. By contrast, interaction models indicate that local unemployment conditions systematically condition the association between immigration attitudes and national identification: the negative relationship between pro-immigration preferences and Britishness is significantly stronger in constituencies with higher unemployment rates. Importantly, this interaction captures differential *co-movement* between attitudes and identity across local contexts, rather than a direct contextual effect on nationalism itself, and is therefore interpreted as a diagnostic rather than a core mechanism.
+
+#### Claimant count
+
+Results for claimant counts closely mirror those for unemployment rates. Constituency-level claimant intensity is not directly associated with changes in national identification in main-effects models, and this finding is robust to the inclusion of age. However, interaction specifications reveal a strong and precisely estimated conditioning effect: the negative association between immigration attitudes and Britishness intensifies as claimant counts increase. This pattern suggests that in areas experiencing higher benefit claims, immigration preferences and national identity become more tightly coupled, even though claimant exposure does not itself reshape levels of national identification. As with unemployment, this interaction is interpreted as evidence of context-dependent attitudinal–identity alignment rather than identity activation.
+
+#### Local income (meso)
+
+Local earnings show no direct association with within-person changes in national identification in main-effects models, indicating that constituency-level income conditions do not independently shape nationalism. Nonetheless, interaction models reveal a robust moderating pattern: the negative association between pro-immigration attitudes and Britishness is significantly stronger in higher-income constituencies. This finding parallels the micro-level income results and suggests that local affluence conditions the strength of attitudinal–identity alignment rather than directly influencing national identification. Taken together, the meso income results reinforce the interpretation of nationalism as a stable predisposition whose relationship to immigration attitudes varies systematically across economic contexts.
+
+::: callout-note
+**Interpretive note.**\
+National identity is socially anchored and temporally stable, but its political relevance is conditional. Economic context does not manufacture nationalism, nor does it erase it; instead, it determines when national identity becomes tightly aligned with attitudes toward immigration.
+:::
+
+### Correlation between ATI and Brit as DV {#meso-vars}
+
+To directly assess how strongly national identification structures immigration attitudes across local contexts, we estimate a set of meso-level models in which the dependent variable is the constituency–wave correlation between Britishness and anti-immigration attitudes. Using the BES panel, we first compute the within-constituency correlation between Britishness and immigration attitudes for each survey wave. We then regress these correlations on constituency-level economic indicators: unemployment rates, claimant counts, and local earnings, while including constituency fixed effects and wave fixed effects. This approach allows us to test whether changes in local economic conditions are associated with changes in the *strength* of the identity–attitude relationship, net of all time-invariant constituency characteristics and nationwide shocks. Standard errors are clustered at the constituency level.
+
+```{r meso_corr_dv, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+# -----------------------
+# Bases (confirm)
+# -----------------------
+BRIT_BASE <- "britishness"
+ATI_BASE  <- "immigSelf"
+TIME_BASE <- "starttime"
+PCON_BASE <- "pcon_code"   # constituency id family
+
+MESO_UNEMP_BASE  <- "unemp_rate_mean"
+MESO_CLAIM_BASE  <- "claimant_mean"
+MESO_INCOME_BASE <- "income"   # will be renamed to income_meso
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+# -----------------------
+# 1) Choose overlapping waves
+# -----------------------
+w_brit <- waves_available(df, BRIT_BASE)
+w_ati  <- waves_available(df, ATI_BASE)
+w_time <- waves_available(df, TIME_BASE)
+w_pcon <- waves_available(df, PCON_BASE)
+
+waves <- Reduce(intersect, list(w_brit, w_ati, w_time, w_pcon))
+if(length(waves) < 3) stop("Too few overlapping waves across britishness, ATI, starttime, and pcon_code.")
+
+# -----------------------
+# 2) Build long panel: id × wave with brit, ati, pcon_code, year
+# -----------------------
+core_cols <- c(
+  paste0(BRIT_BASE, "W", waves),
+  paste0(ATI_BASE,  "W", waves),
+  paste0(PCON_BASE, "W", waves),
+  paste0(TIME_BASE, "W", waves)
+)
+
+df_core <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x
+    if(inherits(x, "haven_labelled")) x <- zap_labels(x)
+    x
+  })) |>
+  select(id, any_of(core_cols))
+
+panel_long_corr <- df_core |>
+  pivot_longer(
+    cols = -id,
+    names_to = c(".value","wave"),
+    names_pattern = "(.+)W(\\d+)$"
+  ) |>
+  mutate(
+    wave = as.integer(wave),
+    starttime_chr = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(
+    brit = all_of(BRIT_BASE),
+    ati  = all_of(ATI_BASE),
+    pcon_code = all_of(PCON_BASE)
+  ) |>
+  mutate(
+    brit = as.numeric(brit),
+    ati  = as.numeric(ati),
+    pcon_code = as.character(pcon_code)
+  ) |>
+  filter(!is.na(brit), !is.na(ati), !is.na(pcon_code), !is.na(wave), !is.na(year))
+
+# -----------------------
+# 3) Helper: meso wide -> long by pcon_code × wave, then attach year
+#    (Since meso vars are already in your merged df as baseW#, this is simplest.)
+# -----------------------
+make_meso_long <- function(df, base, out_name, waves_keep){
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if(length(cols) == 0) return(NULL)
+
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+
+  if(nrow(tmp) == 0) return(NULL)
+  use_cols <- tmp$col
+
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols), ~ as.numeric(if(inherits(.x,"haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      values_to = out_name,
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave))
+}
+
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_long_corr_meso <- panel_long_corr
+if(!is.null(meso_unemp))  panel_long_corr_meso <- left_join(panel_long_corr_meso, meso_unemp,  by = c("id","wave"))
+if(!is.null(meso_claim))  panel_long_corr_meso <- left_join(panel_long_corr_meso, meso_claim,  by = c("id","wave"))
+if(!is.null(meso_income)) panel_long_corr_meso <- left_join(panel_long_corr_meso, meso_income, by = c("id","wave"))
+
+# -----------------------
+# 4) Collapse to pcon_code × wave correlations
+# -----------------------
+corr_pcon_wave <- panel_long_corr_meso |>
+  group_by(pcon_code, wave, year) |>
+  summarise(
+    n = n(),
+    corr_brit_ati = cor(brit, ati, use = "pairwise.complete.obs"),
+    unemp_rate_mean = first(unemp_rate_mean),
+    claimant_mean   = first(claimant_mean),
+    income_meso     = first(income_meso),
+    .groups = "drop"
+  ) |>
+  filter(n >= 30)   # recommended robustness threshold
+
+# -----------------------
+# 5) Correlation-as-DV models (pcon FE + wave FE)
+# -----------------------
+
+# Unemployment
+corr_u <- corr_pcon_wave |> filter(!is.na(unemp_rate_mean))
+m_corr_u <- feols(corr_brit_ati ~ unemp_rate_mean | pcon_code + wave, data = corr_u, cluster = "pcon_code")
+
+# Claimant
+corr_c <- corr_pcon_wave |> filter(!is.na(claimant_mean))
+m_corr_c <- feols(corr_brit_ati ~ claimant_mean | pcon_code + wave, data = corr_c, cluster = "pcon_code")
+
+# Local earnings
+corr_i <- corr_pcon_wave |> filter(!is.na(income_meso))
+m_corr_i <- feols(corr_brit_ati ~ income_meso | pcon_code + wave, data = corr_i, cluster = "pcon_code")
+
+etable(m_corr_u, m_corr_c, m_corr_i)
+
+# -----------------------
+# 6) Optional: quartile context version (nonlinear)
+# -----------------------
+corr_u_q <- corr_u |> mutate(unemp_q = ntile(unemp_rate_mean, 4))
+corr_c_q <- corr_c |> mutate(claim_q = ntile(claimant_mean, 4))
+corr_i_q <- corr_i |> mutate(income_q = ntile(income_meso, 4))
+
+m_corr_u_q <- feols(corr_brit_ati ~ i(unemp_q) | pcon_code + wave, data = corr_u_q, cluster = "pcon_code")
+m_corr_c_q <- feols(corr_brit_ati ~ i(claim_q) | pcon_code + wave, data = corr_c_q, cluster = "pcon_code")
+m_corr_i_q <- feols(corr_brit_ati ~ i(income_q) | pcon_code + wave, data = corr_i_q, cluster = "pcon_code")
+
+etable(m_corr_u_q, m_corr_c_q, m_corr_i_q)
+
+```
+
+```{r meso_corr_tables, warning=FALSE, message=FALSE, echo=FALSE}
+etable(m_corr_u, m_corr_c, m_corr_i)
+etable(m_corr_u_q, m_corr_c_q, m_corr_i_q)
+```
+
+Across all three meso indicators, the correlation between Britishness and immigration attitudes exhibits very limited responsiveness to local economic conditions once constituency and wave fixed effects are included. In the continuous specifications, neither local unemployment rates nor claimant counts are meaningfully associated with within-constituency changes in the strength of the Britishness–ATI relationship. Local earnings show a weak negative association, but the effect is small in magnitude and only marginally distinguishable from zero. Quartile-based specifications similarly reveal no systematic or monotonic differences in the identity–attitude correlation across local economic contexts. Taken together, these findings indicate that short-term fluctuations in constituency-level economic conditions do not substantially reshape how tightly national identity and immigration attitudes are aligned at the local level.

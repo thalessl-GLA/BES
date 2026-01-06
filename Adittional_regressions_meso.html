@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.7.32">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Adittional Regressions - Meso</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="Adittional_regressions_meso_files/libs/clipboard/clipboard.min.js"></script>
+<script src="Adittional_regressions_meso_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="Adittional_regressions_meso_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="Adittional_regressions_meso_files/libs/quarto-html/popper.min.js"></script>
+<script src="Adittional_regressions_meso_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="Adittional_regressions_meso_files/libs/quarto-html/anchor.min.js"></script>
+<link href="Adittional_regressions_meso_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="Adittional_regressions_meso_files/libs/quarto-html/quarto-syntax-highlighting-37eea08aefeeee20ff55810ff984fec1.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="Adittional_regressions_meso_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="Adittional_regressions_meso_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="Adittional_regressions_meso_files/libs/bootstrap/bootstrap-81267100e462c21b3d6c0d5bf76a3417.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Adittional Regressions - Meso</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 1 × 5
+   n_obs pct_unemp_nonmiss pct_claim_nonmiss pct_inc_nonmiss pct_age_nonmiss
+   &lt;int&gt;             &lt;dbl&gt;             &lt;dbl&gt;           &lt;dbl&gt;           &lt;dbl&gt;
+1 480180             0.548             0.548           0.451           1.000</code></pre>
+</div>
+</div>
+<p>The objective of this section is to assess whether constituency-level economic context, captured through official Office for National Statistics (ONS) indicators such as unemployment rates, claimant counts, and local earnings, is associated with within-individual change in national identification. By reversing the outcome relative to the main meso analyses, we evaluate whether objectively measured local economic conditions directly shape levels of national attachment, rather than conditioning the political expression of identity in attitudes toward immigration. This specification serves as a diagnostic test of the stability of nationalism: if national identification functions as a relatively durable predisposition, then short-term variation in local economic context should not systematically translate into changes in Britishness. For a brief description of the meso-level variables, <a href="#meso-vars">click here</a>.</p>
+<p>All models are estimated using linear fixed-effects regressions that include individual fixed effects and wave fixed effects. Individual fixed effects absorb all time-invariant respondent characteristics, including stable ideological orientations, cohort membership, and baseline levels of national identification, ensuring that estimates are identified exclusively from within-person change over time. Wave fixed effects capture common national shocks and period-specific influences, such as Brexit-related events, macroeconomic cycles, and the COVID-19 pandemic, thereby isolating variation in local economic context net of nationwide trends. Standard errors are clustered at the individual level to account for serial correlation arising from repeated observations of the same respondents across waves. Because national identification is treated as the outcome in these models, interaction terms between immigration attitudes and meso-level economic indicators are interpreted as conditioning the co-movement between attitudes and identity, rather than as evidence of contextual activation of nationalism. Accordingly, these interaction specifications are presented as robustness and diagnostic checks, not as tests of the core moderation hypotheses developed in the main meso analysis.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>$unemp_main_noage
+                     Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig           -1.391792e-02 0.0016593315 -8.3876662 5.099201e-17
+unemp_rate_mean  7.120774e-05 0.0006551235  0.1086936 9.134460e-01
+attr(,"type")
+[1] "Clustered (id)"
+
+$unemp_main_age
+                     Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig           -1.389395e-02 0.0016595254 -8.3722441 5.811915e-17
+unemp_rate_mean  7.271739e-05 0.0006551204  0.1109985 9.116180e-01
+age              6.521917e-03 0.0048061187  1.3570029 1.747870e-01
+attr(,"type")
+[1] "Clustered (id)"
+
+$unemp_int_noage
+                          Estimate   Std. Error   t value     Pr(&gt;|t|)
+immig                  0.066442465 0.0084923139  7.823835 5.233640e-15
+unemp_rate_mean        0.006318220 0.0009320614  6.778760 1.226850e-11
+immig:unemp_rate_mean -0.001868063 0.0001934171 -9.658209 4.763756e-22
+attr(,"type")
+[1] "Clustered (id)"
+
+$unemp_int_age
+                          Estimate   Std. Error   t value     Pr(&gt;|t|)
+immig                  0.066617349 0.0084931885  7.843621 4.472179e-15
+unemp_rate_mean        0.006331502 0.0009320463  6.793119 1.110793e-11
+age                    0.006779775 0.0048106386  1.409330 1.587446e-01
+immig:unemp_rate_mean -0.001871564 0.0001934332 -9.675507 4.024554e-22
+attr(,"type")
+[1] "Clustered (id)"
+
+$claimant_main_noage
+                   Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig         -1.392144e-02 0.0016591384 -8.3907679 4.966640e-17
+claimant_mean -1.350805e-05 0.0000158854 -0.8503436 3.951386e-01
+attr(,"type")
+[1] "Clustered (id)"
+
+$claimant_main_age
+                   Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig         -0.0138974811 1.659333e-03 -8.3753439 5.661184e-17
+claimant_mean -0.0000135138 1.588648e-05 -0.8506476 3.949696e-01
+age            0.0065360623 4.804889e-03  1.3602942 1.737436e-01
+attr(,"type")
+[1] "Clustered (id)"
+
+$claimant_int_noage
+                         Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig                0.0111915793 2.314971e-03   4.834436 1.339581e-06
+claimant_mean        0.0001642912 1.948758e-05   8.430560 3.539502e-17
+immig:claimant_mean -0.0000446424 3.002756e-06 -14.867140 7.054090e-50
+attr(,"type")
+[1] "Clustered (id)"
+
+$claimant_int_age
+                         Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig                0.0112178344 2.314910e-03   4.845905 1.264500e-06
+claimant_mean        0.0001643042 1.948744e-05   8.431283 3.517731e-17
+age                  0.0065521694 4.797171e-03   1.365840 1.719958e-01
+immig:claimant_mean -0.0000446471 3.002782e-06 -14.868579 6.904775e-50
+attr(,"type")
+[1] "Clustered (id)"
+
+$income_main_noage
+                 Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig       -8.936450e-03 0.0018735801 -4.7697189 1.850986e-06
+income_meso  6.803575e-05 0.0001093865  0.6219758 5.339611e-01
+attr(,"type")
+[1] "Clustered (id)"
+
+$income_main_age
+                 Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig       -8.896712e-03 0.0018737199 -4.7481549 2.059538e-06
+income_meso  6.694385e-05 0.0001093872  0.6119899 5.405477e-01
+age          8.033919e-03 0.0043262630  1.8570112 6.331652e-02
+attr(,"type")
+[1] "Clustered (id)"
+
+$income_int_noage
+                       Estimate   Std. Error   t value     Pr(&gt;|t|)
+immig              0.1053948306 0.0089123087  11.82576 3.230316e-32
+income_meso        0.0009620183 0.0001303362   7.38105 1.599315e-13
+immig:income_meso -0.0002369672 0.0000182608 -12.97682 1.962076e-38
+attr(,"type")
+[1] "Clustered (id)"
+
+$income_int_age
+                       Estimate   Std. Error    t value     Pr(&gt;|t|)
+immig              0.1055271391 0.0089126478  11.840156 2.722663e-32
+income_meso        0.0009616423 0.0001303395   7.377979 1.636583e-13
+age                0.0079758249 0.0043320524   1.841119 6.561111e-02
+immig:income_meso -0.0002371572 0.0000182610 -12.987091 1.716795e-38
+attr(,"type")
+[1] "Clustered (id)"</code></pre>
+</div>
+</div>
+<section id="meso-level-analysis" class="level2 tabset">
+<h2 class="tabset anchored" data-anchor-id="meso-level-analysis">Meso-level analysis</h2>
+<section id="results" class="level3">
+<h3 class="anchored" data-anchor-id="results">Results</h3>
+<p>We estimate a sequence of meso-level fixed-effects models to assess whether objectively measured local economic conditions are associated with within-individual change in national identification. Using official ONS indicators, e.g.&nbsp;constituency-level unemployment rates, claimant counts, and local earnings, we examine whether variation in local economic context directly shapes levels of British national identity over time. For each meso indicator, we proceed in two steps. First, I estimate a baseline specification in which national identification is regressed on the meso-level economic indicator, controlling for immigration attitudes as well as individual and wave fixed effects. Second, I introduce an interaction between the meso indicator and immigration attitudes to assess whether local economic context conditions the <em>co-movement</em> between national identification and attitudes toward immigration. These interaction models are interpreted as diagnostic tests of contextual heterogeneity rather than as evidence of identity activation. All models are estimated using the <code>feols</code> function, which efficiently implements linear fixed-effects regressions with high-dimensional fixed effects and clustered standard errors.</p>
+<p>The inclusion of individual fixed effects ensures that estimates are identified exclusively from within-person changes over time, net of all time-invariant characteristics such as baseline ideological orientations, cohort membership, and stable components of national identity. Wave fixed effects absorb common national shocks and period-specific influences, including major political events, macroeconomic cycles, and the COVID-19 pandemic. Standard errors are clustered at the individual level to account for serial correlation arising from repeated observations of the same respondents across waves. This modeling strategy yields conservative estimates and allows a clean interpretation of meso-level economic variation as being associated with changes in national identification or with changes in the strength of attitudinal–identity alignment within the same individuals, rather than with cross-sectional differences between respondents.</p>
+<section id="local-unemployment-rate" class="level4">
+<h4 class="anchored" data-anchor-id="local-unemployment-rate">Local unemployment rate</h4>
+<p>Respondent fixed-effects models provide no evidence that constituency-level unemployment rates are directly associated with within-individual changes in national identification. In the main-effects specifications, local unemployment exhibits no statistically meaningful association with Britishness, and this null result is unchanged by the inclusion of age. By contrast, interaction models indicate that local unemployment conditions systematically condition the association between immigration attitudes and national identification: the negative relationship between pro-immigration preferences and Britishness is significantly stronger in constituencies with higher unemployment rates. Importantly, this interaction captures differential <em>co-movement</em> between attitudes and identity across local contexts, rather than a direct contextual effect on nationalism itself, and is therefore interpreted as a diagnostic rather than a core mechanism.</p>
+</section>
+<section id="claimant-count" class="level4">
+<h4 class="anchored" data-anchor-id="claimant-count">Claimant count</h4>
+<p>Results for claimant counts closely mirror those for unemployment rates. Constituency-level claimant intensity is not directly associated with changes in national identification in main-effects models, and this finding is robust to the inclusion of age. However, interaction specifications reveal a strong and precisely estimated conditioning effect: the negative association between immigration attitudes and Britishness intensifies as claimant counts increase. This pattern suggests that in areas experiencing higher benefit claims, immigration preferences and national identity become more tightly coupled, even though claimant exposure does not itself reshape levels of national identification. As with unemployment, this interaction is interpreted as evidence of context-dependent attitudinal–identity alignment rather than identity activation.</p>
+</section>
+<section id="local-income-meso" class="level4">
+<h4 class="anchored" data-anchor-id="local-income-meso">Local income (meso)</h4>
+<p>Local earnings show no direct association with within-person changes in national identification in main-effects models, indicating that constituency-level income conditions do not independently shape nationalism. Nonetheless, interaction models reveal a robust moderating pattern: the negative association between pro-immigration attitudes and Britishness is significantly stronger in higher-income constituencies. This finding parallels the micro-level income results and suggests that local affluence conditions the strength of attitudinal–identity alignment rather than directly influencing national identification. Taken together, the meso income results reinforce the interpretation of nationalism as a stable predisposition whose relationship to immigration attitudes varies systematically across economic contexts.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Interpretive note.</strong><br>
+National identity is socially anchored and temporally stable, but its political relevance is conditional. Economic context does not manufacture nationalism, nor does it erase it; instead, it determines when national identity becomes tightly aligned with attitudes toward immigration.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="meso-vars" class="level3">
+<h3 class="anchored" data-anchor-id="meso-vars">Correlation between ATI and Brit as DV</h3>
+<p>To directly assess how strongly national identification structures immigration attitudes across local contexts, we estimate a set of meso-level models in which the dependent variable is the constituency–wave correlation between Britishness and anti-immigration attitudes. Using the BES panel, we first compute the within-constituency correlation between Britishness and immigration attitudes for each survey wave. We then regress these correlations on constituency-level economic indicators: unemployment rates, claimant counts, and local earnings, while including constituency fixed effects and wave fixed effects. This approach allows us to test whether changes in local economic conditions are associated with changes in the <em>strength</em> of the identity–attitude relationship, net of all time-invariant constituency characteristics and nationwide shocks. Standard errors are clustered at the constituency level.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>                       m_corr_u           m_corr_c           m_corr_i
+Dependent Var.:   corr_brit_ati      corr_brit_ati      corr_brit_ati
+                                                                     
+unemp_rate_mean 0.0003 (0.0005)                                      
+claimant_mean                   3.01e-5. (1.65e-5)                   
+income_meso                                        -0.0002. (9.59e-5)
+Fixed-Effects:  --------------- ------------------ ------------------
+pcon_code                   Yes                Yes                Yes
+wave                        Yes                Yes                Yes
+_______________ _______________ __________________ __________________
+S.E.: Clustered   by: pcon_code      by: pcon_code      by: pcon_code
+Observations              9,419              9,419              7,189
+R2                      0.35299            0.35356            0.36182
+Within R2               4.83e-5            0.00092            0.00054
+---
+Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                     m_corr_u_q       m_corr_c_q       m_corr_i_q
+Dependent Var.:   corr_brit_ati    corr_brit_ati    corr_brit_ati
+                                                                 
+unemp_q = 2     0.0113 (0.0069)                                  
+unemp_q = 3     0.0100 (0.0076)                                  
+unemp_q = 4     0.0122 (0.0079)                                  
+claim_q = 2                     -0.0038 (0.0080)                 
+claim_q = 3                     -0.0094 (0.0105)                 
+claim_q = 4                     -0.0138 (0.0150)                 
+income_q = 2                                      0.0057 (0.0083)
+income_q = 3                                     -0.0033 (0.0105)
+income_q = 4                                     -0.0128 (0.0143)
+Fixed-Effects:  --------------- ---------------- ----------------
+pcon_code                   Yes              Yes              Yes
+wave                        Yes              Yes              Yes
+_______________ _______________ ________________ ________________
+S.E.: Clustered   by: pcon_code    by: pcon_code    by: pcon_code
+Observations              9,419            9,419            7,189
+R2                      0.35335          0.35310          0.36195
+Within R2               0.00060          0.00022          0.00075
+---
+Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1</code></pre>
+</div>
+</div>
+<p>Across all three meso indicators, the correlation between Britishness and immigration attitudes exhibits very limited responsiveness to local economic conditions once constituency and wave fixed effects are included. In the continuous specifications, neither local unemployment rates nor claimant counts are meaningfully associated with within-constituency changes in the strength of the Britishness–ATI relationship. Local earnings show a weak negative association, but the effect is small in magnitude and only marginally distinguishable from zero. Quartile-based specifications similarly reveal no systematic or monotonic differences in the identity–attitude correlation across local economic contexts. Taken together, these findings indicate that short-term fluctuations in constituency-level economic conditions do not substantially reshape how tightly national identity and immigration attitudes are aligned at the local level.</p>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+        const codeEl = trigger.previousElementSibling.cloneNode(true);
+        for (const childEl of codeEl.children) {
+          if (isCodeAnnotation(childEl)) {
+            childEl.remove();
+          }
+        }
+        return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
