@@ -1,7 +1,3 @@
-# claimant count
-#https://www.ons.gov.uk/employmentandlabourmarket/peoplenotinwork/unemployment/datasets/claimantcountandvacanciesdataset
-#Claimant Count : K02000001 UK : People : SA : Thousands
-#BCJD
 
 # CPI
 #https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/consumerpriceindices
@@ -13,6 +9,8 @@ library(dplyr)
 library(tidyr)
 library(stringr)
 library(lubridate)
+library(readxl)
+library(readr)
 
 # Open file
 
@@ -194,8 +192,93 @@ unemp_compare <- unemp_bes_check %>%
 
 print(unemp_compare, n = 1000)
 
+# claimant count
+#https://www.ons.gov.uk/employmentandlabourmarket/peoplenotinwork/unemployment/datasets/claimantcountandvacanciesdataset
+#Claimant Count : K02000001 UK : People : SA : Thousands
+#BCJD
 
 
+# 1) Read whole sheet raw (no headers)
+raw <- read_excel("/Users/t.souza-lima.1/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/Macro_variables/claimant.xlsx")
 
-
+extract_ons_series_by_cdid <- function(path, cdid_target) {
+  raw <- read_excel(path, col_names = FALSE)
   
+  as_str <- function(x) str_squish(as.character(x))
+  
+  # Find CDID row (where col A == "CDID")
+  cdid_row <- which(as_str(raw[[1]]) == "CDID")[1]
+  if (is.na(cdid_row)) stop("Couldn't find CDID row (col A == 'CDID').")
+  
+  # Locate the column containing the target CDID
+  cdid_vals <- as_str(unlist(raw[cdid_row, ], use.names = FALSE))
+  col_idx <- which(cdid_vals == cdid_target)[1]
+  if (is.na(col_idx)) stop(paste0("Couldn't find CDID '", cdid_target, "' in CDID row."))
+  
+  # Find first data row in time column (YYYY or YYYY Q#)
+  time_col <- as_str(raw[[1]])
+  data_start <- which(str_detect(time_col, "^\\d{4}$|^\\d{4}\\s*Q[1-4]$"))[1]
+  if (is.na(data_start)) stop("Couldn't find first data row (YYYY or YYYY Q#) in col A.")
+  
+  # Extract period + value
+  out <- tibble(
+    period = as_str(raw[[1]][data_start:nrow(raw)]),
+    value  = parse_number(as_str(raw[[col_idx]][data_start:nrow(raw)]))
+  ) %>%
+    filter(str_detect(period, "^\\d{4}$|^\\d{4}\\s*Q[1-4]$")) %>%
+    mutate(
+      is_quarter = str_detect(period, "Q[1-4]$"),
+      year       = as.integer(str_extract(period, "^\\d{4}")),
+      quarter    = ifelse(is_quarter, as.integer(str_extract(period, "(?<=Q)\\d")), NA_integer_)
+    ) %>%
+    arrange(year, quarter)
+  
+  out
+}
+
+# inputs
+path_claimant <- "/Users/t.souza-lima.1/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/Macro_variables/claimant.xlsx"
+cdid_claimant <- "BCJD"
+var_stem      <- "claimant_k"   # name stem for W# columns
+
+# 1) Extract series
+claimant_clean <- extract_ons_series_by_cdid(path_claimant, cdid_claimant)
+
+# 2) Keep quarterly rows + recent years, then annual mean
+claimant_year <- claimant_clean %>%
+  filter(is_quarter, year >= 2013) %>%
+  group_by(year) %>%
+  summarise(
+    claimant_k_year = mean(value, na.rm = TRUE),
+    n_quarters = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+# 3) Map to waves and pivot to wide W# columns
+claimant_by_wave_wide <- wave_year_lookup %>%
+  left_join(claimant_year, by = c("fieldwork_year" = "year")) %>%
+  mutate(wave_var = paste0(var_stem, "W", wave)) %>%
+  select(wave_var, claimant_k_year) %>%
+  pivot_wider(names_from = wave_var, values_from = claimant_k_year)
+
+# 4) Append to dataset (constant within wave across respondents)
+BES_subset_panel_full_v2 <- BES_subset_panel_full_v2 %>%
+  bind_cols(claimant_by_wave_wide[rep(1, nrow(BES_subset_panel_full_v2)), ])
+
+# 5) Validation check (diff should be 0)
+claimant_bes_check <- wave_year_lookup %>%
+  mutate(
+    claimant_from_bes = sapply(
+      wave,
+      function(w) BES_subset_panel_full_v2[[paste0(var_stem, "W", w)]][1]
+    )
+  )
+
+claimant_compare <- claimant_bes_check %>%
+  left_join(claimant_year %>% select(year, claimant_k_year),
+            by = c("fieldwork_year" = "year")) %>%
+  mutate(diff = claimant_from_bes - claimant_k_year)
+
+print(claimant_compare, n = 10000)
+
