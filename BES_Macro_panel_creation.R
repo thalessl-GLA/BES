@@ -1,10 +1,4 @@
 
-# CPI
-#https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/consumerpriceindices
-
-#CPIH ANNUAL RATE 00: ALL ITEMS 2015=100
-#L55O
-  
 library(dplyr)
 library(tidyr)
 library(stringr)
@@ -281,4 +275,76 @@ claimant_compare <- claimant_bes_check %>%
   mutate(diff = claimant_from_bes - claimant_k_year)
 
 print(claimant_compare, n = 10000)
+
+
+# CPI
+#https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/consumerpriceindices
+
+#CPIH ANNUAL RATE 00: ALL ITEMS 2015=100
+#L55O
+
+# inputs
+path_cpi <- "/Users/t.souza-lima.1/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/Macro_variables/CPI.xlsx"
+cdid_cpi <- "L55O"
+var_stem <- "cpih_rate"
+
+# extract
+cpih_clean <- extract_ons_series_by_cdid(path_cpi, cdid_cpi)
+
+# quick sanity
+print(head(cpih_clean, 15))
+print(tail(cpih_clean, 15))
+summary(cpih_clean$value)
+
+#Keep quarterly data + recent years
+
+cpih_year <- cpih_clean %>%
+  filter(
+    is_quarter,
+    year >= 2013
+  ) %>%
+  group_by(year) %>%
+  summarise(
+    cpih_rate_year = mean(value, na.rm = TRUE),
+    n_quarters = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+cpih_year
+
+#Map CPIH to BES waves and create cpih_rateW# 
+cpih_by_wave_wide <- wave_year_lookup %>%
+  left_join(cpih_year, by = c("fieldwork_year" = "year")) %>%
+  mutate(wave_var = paste0(var_stem, "W", wave)) %>%
+  select(wave_var, cpih_rate_year) %>%
+  pivot_wider(names_from = wave_var, values_from = cpih_rate_year)
+
+# Merge
+BES_subset_panel_full_v2 <- BES_subset_panel_full_v2 %>%
+  bind_cols(cpih_by_wave_wide[rep(1, nrow(BES_subset_panel_full_v2)), ])
+
+#Checks
+
+cpih_bes_check <- wave_year_lookup %>%
+  mutate(
+    cpih_from_bes = sapply(
+      wave,
+      function(w) BES_subset_panel_full_v2[[paste0(var_stem, "W", w)]][1]
+    )
+  )
+
+cpih_compare <- cpih_bes_check %>%
+  left_join(cpih_year, by = c("fieldwork_year" = "year")) %>%
+  mutate(diff = cpih_from_bes - cpih_rate_year)
+
+print(cpih_compare, n = 10000)
+
+#Save
+
+saveRDS(
+  BES_subset_panel_full_v2,
+  file = "/Users/t.souza-lima.1/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES_subset_panel_full_v2.rds"
+)
+
 
