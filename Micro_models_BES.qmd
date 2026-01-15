@@ -13,11 +13,11 @@ library(fixest)
 library(haven)
 library(purrr)
 
-BES_subset_panel_full_v1 <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v1.rds")
+BES_subset_panel_full_v2 <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v2.rds")
 
-df <- BES_subset_panel_full_v1
+df <- BES_subset_panel_full_v2
 
-rm(BES_subset_panel_full_v1)
+rm(BES_subset_panel_full_v2)
 gc()
 
 DV_BASE   <- "immigSelf"
@@ -288,7 +288,148 @@ summary(m_inc_3)
 summary(m_inc_4)
 ```
 
-Respondent fixed-effects models indicate that British national identity retains a statistically significant within-individual association with immigration self-placement in samples restricted to respondents with observed household income. In contrast, household income itself does not exert an independent within-person effect, nor does its inclusion attenuate the estimated effect of Britishness. Introducing an interaction between income and Britishness does not improve model fit and yields no evidence that income conditions the influence of national identity on immigration attitudes. Together, these results suggest that the political relevance of Britishness is not driven by individual self-assigned income levels per se, motivating a shift from resource-based measures toward indicators of economic insecurity and exposure to risk in subsequent analyses.
+Respondent fixed-effects models indicate that British national identity retains a statistically significant within-individual association with immigration self-placement in samples restricted to respondents with observed household income. In contrast, household income itself does not exert an independent within-person effect, nor does its inclusion attenuate the estimated effect of Britishness. Introducing an interaction between income and Britishness does not improve model fit and yields no evidence that income conditions the influence of national identity on immigration attitudes. Together, these results suggest that the political relevance of Britishness is not driven by individual self-assigned income levels per se, motivating a shift from resource-based measures toward indicators of economic insecurity and exposure to risk in subsequent analyses. To address differences in household composition and comparability of income across respondents, I re-estimate the micro-level income models using an equivalised measure of gross household income constructed following the OECD-modified equivalence scale and ONS guidelines (for a description of the creation of such variables, see Annex XXX).
+
+```{r income_equivalised, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+# ============================================================
+#Equivalised household income (ONS OECD-modified scale)
+# ============================================================
+# This chunk:
+# 1) Loads the derived equivalised income file (id-wave)
+# 2) Joins it to a long panel (built with the same DV/brit/time structure)
+# 3) Estimates the same FE specifications using equivalised income
+#
+
+# --- Load equivalised income (constructed externally; keyed by id + wave) ---
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds")
+
+# --- Build long panels using the same infrastructure as the income models ---
+# use make_long_with_income() but feed any income_base that exists across waves.
+# Here, the *original* income base only to create the canonical long structure,
+# then merge equivalised income by (id, wave).
+panel_eq_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,   # uses your existing income base to ensure overlap
+  age_base = NULL
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base = AGE_BASE
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+# --- Sanity check: merge worked and missingness is as expected ---
+panel_eq_age %>%
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    share_eq03_missing = mean(is.na(income_eq_child03)),
+    share_eq05_missing = mean(is.na(income_eq_child05))
+  )
+
+# ============================================================
+# Models with equivalised income
+# ============================================================
+
+# --- Prepare analysis samples (explicit, avoids silent failures) ---
+panel_eq03_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child03))
+
+panel_eq05_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child05))
+
+# --- Sanity checks: fail fast with a clear message if merge/coverage is an issue ---
+if(nrow(panel_eq03_noage) == 0 || nrow(panel_eq03_age) == 0){
+  stop("No non-missing income_eq_child03 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+if(nrow(panel_eq05_noage) == 0 || nrow(panel_eq05_age) == 0){
+  stop("No non-missing income_eq_child05 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+# --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_1 <- feols(
+  dv ~ brit + income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_2 <- feols(
+  dv ~ brit + income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_3 <- feols(
+  dv ~ brit * income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_4 <- feols(
+  dv ~ brit * income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+# --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_1 <- feols(
+  dv ~ brit + income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_2 <- feols(
+  dv ~ brit + income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_3 <- feols(
+  dv ~ brit * income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_4 <- feols(
+  dv ~ brit * income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+```
+
+```{r income_equivalised_results 1, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound A: child weight = 0.3 (lower bound)
+summary(m_eq03_1)
+summary(m_eq03_2)
+summary(m_eq03_3)
+summary(m_eq03_4)
+
+```
+
+Using the conservative lower-bound assumption that all dependent children receive a weight of 0.3, respondent fixed-effects models with wave fixed effects yield results that closely mirror those obtained with raw household income. Across all specifications, British national identity retains a statistically precise within-individual association with immigration self-placement, while equivalised household income itself exhibits no independent within-person effect. Including age controls does not alter these estimates, and introducing an interaction between Britishness and equivalised income provides no evidence that income conditions the attitudinal relevance of national identity. Model fit values remain virtually unchanged relative to the baseline income specifications. Taken together, these findings indicate that the null effect of income is not an artefact of household size or composition and reinforce the conclusion that individual material resources, whether measured in raw or equivalised terms, do not meaningfully activate national identity in shaping immigration attitudes.
+
+```{r income_equivalised_results 2, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound B: child weight = 0.5 (upper bound)
+summary(m_eq05_1)
+summary(m_eq05_2)
+summary(m_eq05_3)
+summary(m_eq05_4)
+
+```
+
+As a further robustness check, I re-estimate the micro-level income models using an alternative equivalised income measure that assigns a higher weight to dependent children (0.5), corresponding to the upper bound of the OECD-modified equivalence scale. Results from respondent fixed-effects models with wave fixed effects are substantively indistinguishable from those obtained under the lower-bound specification. British national identity continues to exhibit a statistically precise within-individual association with immigration self-placement, while equivalised household income shows no independent effect and does not attenuate the estimated impact of Britishness. Adding age controls leaves the results unchanged, and interaction models provide no evidence that equivalised income conditions the relationship between national identity and immigration attitudes. Model fit remain virtually identical across specifications. Taken together, these findings demonstrate that the null effect of income is robust to alternative assumptions regarding the relative consumption needs of children and confirm that individual economic resources—whether measured using conservative or generous equivalence scales—do not meaningfully activate national identity in shaping immigration preferences.
 
 ```{r risk 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
 
