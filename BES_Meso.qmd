@@ -216,8 +216,98 @@ Results for claimant count closely parallel those for the unemployment rate. In 
 
 In contrast to unemployment and claimant indicators, local income does not exhibit either a significant main effect or a statistically meaningful interaction with Britishness. Neither the baseline nor the interaction specifications provide evidence that changes in constituency-level income are associated with within-person changes in immigration attitudes. This null result is consistent across models with and without age controls. Substantively, this suggests that short-run fluctuations in local income levels, at least as measured at the constituency level, are less salient for shaping immigration attitudes than indicators directly linked to labour market insecurity and welfare dependence. The absence of a moderating effect further indicates that income-based contextual variation does not interact with national identification in the same way as unemployment-related measures.
 
-::: {.callout-note}
-**Interpretive note.**  
+### Robustness Checks
+
+#### Brittishness as Categorical
+
+```{r robs check brit cat, include=FALSE, echo=FALSE}
+# ==========================================================
+# MAIN MESO MODELS (robustness): Britishness categorical (ref = 7)
+# id FE + wave FE, clustered by id
+# ==========================================================
+# Justification:
+# Reviewer-requested functional-form check: replace linear brit with
+# a full set of Britishness categories, using 7 ("very strongly British")
+# as the reference group. All else remains identical.
+# ==========================================================
+
+# Optional: enforce valid 1..7 values (drops any DK/PNTA miscoding if present)
+panel_meso_cat <- panel_meso %>%
+  mutate(
+    brit = as.numeric(haven::zap_labels(brit)),
+    age  = as.numeric(haven::zap_labels(age)),
+    dv   = as.numeric(haven::zap_labels(dv))
+  ) %>%
+  filter(!is.na(dv), !is.na(brit), brit %in% 1:7, !is.na(wave))
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u <- panel_meso_cat %>% filter(!is.na(unemp_rate_mean))
+
+m_u1_cat <- feols(dv ~ i(brit, ref = 7) + unemp_rate_mean        | id + wave,
+                  data = panel_u, cluster = "id")
+m_u2_cat <- feols(dv ~ i(brit, ref = 7) + unemp_rate_mean + age  | id + wave,
+                  data = panel_u, cluster = "id")
+m_u3_cat <- feols(dv ~ i(brit, ref = 7) * unemp_rate_mean        | id + wave,
+                  data = panel_u, cluster = "id")
+m_u4_cat <- feols(dv ~ i(brit, ref = 7) * unemp_rate_mean + age  | id + wave,
+                  data = panel_u, cluster = "id")
+
+# ---------- CLAIMANT COUNT ----------
+panel_c <- panel_meso_cat %>% filter(!is.na(claimant_mean))
+
+m_c1_cat <- feols(dv ~ i(brit, ref = 7) + claimant_mean         | id + wave,
+                  data = panel_c, cluster = "id")
+m_c2_cat <- feols(dv ~ i(brit, ref = 7) + claimant_mean + age   | id + wave,
+                  data = panel_c, cluster = "id")
+m_c3_cat <- feols(dv ~ i(brit, ref = 7) * claimant_mean         | id + wave,
+                  data = panel_c, cluster = "id")
+m_c4_cat <- feols(dv ~ i(brit, ref = 7) * claimant_mean + age   | id + wave,
+                  data = panel_c, cluster = "id")
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i <- panel_meso_cat %>% filter(!is.na(income_meso))
+
+m_i1_cat <- feols(dv ~ i(brit, ref = 7) + income_meso           | id + wave,
+                  data = panel_i, cluster = "id")
+m_i2_cat <- feols(dv ~ i(brit, ref = 7) + income_meso + age     | id + wave,
+                  data = panel_i, cluster = "id")
+m_i3_cat <- feols(dv ~ i(brit, ref = 7) * income_meso           | id + wave,
+                  data = panel_i, cluster = "id")
+m_i4_cat <- feols(dv ~ i(brit, ref = 7) * income_meso + age     | id + wave,
+                  data = panel_i, cluster = "id")
+
+
+```
+
+```{r meso_cat_models_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+list(
+  unemp_main_noage_cat = m_u1_cat,
+  unemp_main_age_cat   = m_u2_cat,
+  unemp_int_noage_cat  = m_u3_cat,
+  unemp_int_age_cat    = m_u4_cat,
+  claimant_main_noage_cat = m_c1_cat,
+  claimant_main_age_cat   = m_c2_cat,
+  claimant_int_noage_cat  = m_c3_cat,
+  claimant_int_age_cat    = m_c4_cat,
+  income_main_noage_cat = m_i1_cat,
+  income_main_age_cat   = m_i2_cat,
+  income_int_noage_cat  = m_i3_cat,
+  income_int_age_cat    = m_i4_cat
+) |> lapply(\(m) fixest::coeftable(m))
+
+```
+
+Re-estimating the meso-level models using Britishness as a categorical variable with the “very strongly British” category as the reference yields results that closely replicate the conclusions of the baseline meso analysis, using the nationalism proxy as continuous. Across all specifications, the Britishness category coefficients remain positive, precisely estimated, and monotonically ordered, indicating that respondents with weaker national identification are consistently more permissive toward immigration relative to the most strongly British group. This pattern holds across all meso indicators and model variants, underscoring that the categorical re-specification does not alter the core identity–attitudes relationship.
+
+For local unemployment rates, the main-effect models again show no statistically meaningful unconditional association between changes in constituency-level unemployment and within-individual changes in immigration attitudes. However, once interactions with categorical Britishness are introduced, unemployment becomes politically consequential in a conditional manner. The interaction terms are positive and statistically significant for the weakest Britishness category (brit = 1) and for intermediate identity categories (brit = 4 and brit = 5), indicating that increases in local unemployment are associated with more restrictive immigration attitudes among respondents with weaker national identification. These conditional effects attenuate and become indistinguishable from zero as Britishness increases, with no meaningful interaction for respondents close to the reference category. The inclusion of age leaves this pattern unchanged, confirming that the moderation structure is not driven by life-cycle dynamics.
+
+A highly similar pattern emerges for claimant count. In the baseline specifications, claimant intensity exhibits no independent main effect once individual and wave fixed effects are included. In the interaction models, however, claimant count becomes significantly associated with immigration attitudes among respondents with lower and intermediate levels of Britishness. Positive interaction terms for categories such as brit = 2 and brit = 4 indicate that increases in local welfare dependency are linked to more restrictive immigration attitudes among weaker identifiers, while the effect diminishes and loses significance as Britishness increases toward the reference group. As with unemployment, age controls do not substantively alter these results. Together, the unemployment and claimant findings reinforce the interpretation that objective local economic stress matters primarily for individuals whose national identification is weaker, while strongly British respondents appear comparatively insulated from local labour-market conditions.
+
+By contrast, local income (ASHE median earnings) shows no evidence of either an unconditional effect or a conditional interaction with Britishness in any specification. Across both main-effect and interaction models, the income coefficient remains small, precisely estimated around zero, and statistically insignificant. Interaction terms between income and categorical Britishness are likewise weak, inconsistently signed, and fail to reach conventional significance thresholds, even for the lowest Britishness categories. This mirrors the baseline meso-level results and indicates that short-run changes in local earnings levels do not meaningfully shape immigration attitudes, nor do they interact with national identification in the way that unemployment-related indicators do.
+
+::: callout-note
+**Interpretive note.**\
 Each additional unit of Britishness weakens the effect of unemployment and claimant intensity on anti-immigration attitudes. These meso-economic effects are substantively meaningful only at low levels of national identification and converge to zero as Britishness increases.
 :::
 
