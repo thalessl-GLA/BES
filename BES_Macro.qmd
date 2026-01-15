@@ -264,7 +264,7 @@ list(
 
 ```
 
-## Meso-level analysis {.tabset}
+## Macro-level analysis {.tabset}
 
 ### Results
 
@@ -309,6 +309,81 @@ This pattern is robust to the inclusion of age controls and mirrors the moderati
 All macroeconomic indicators operate through the same moderation mechanism: they do not shift immigration attitudes directly, but condition how national identification translates into attitudes. The interaction effects are stable, precisely estimated, and robust across specifications.
 :::
 
+### Robustness Checks
+
+#### Brittishness as Categorical
+
+```{r rob check brit cat, include=FALSE, echo=FALSE}
+# ============================================================
+# Macro robustness: Britishness as categorical (ref = 7)
+# ============================================================
+
+# 0) Ensure numeric + build categorical with 7 as reference
+# Justification: makes the categorical specification directly comparable
+# across micro/meso/macro (same base category = "most British").
+df_long <- df_long %>%
+  mutate(
+    brit_num = as.numeric(brit),
+    brit_cat = factor(brit_num, levels = 1:7) %>% relevel(ref = "7")
+  )
+
+# 1) Helper: run same 4-model structure with brit_cat
+run_macro_cat <- function(varname){
+
+  f_main     <- as.formula(paste0("dv ~ brit_cat + ", varname, " | id + wave"))
+  f_main_age <- as.formula(paste0("dv ~ brit_cat + ", varname, " + age | id + wave"))
+  f_int      <- as.formula(paste0("dv ~ brit_cat * ", varname, " | id + wave"))
+  f_int_age  <- as.formula(paste0("dv ~ brit_cat * ", varname, " + age | id + wave"))
+
+  list(
+    main     = feols(f_main,     data = df_long, cluster = ~id),
+    main_age = feols(f_main_age, data = df_long, cluster = ~id),
+    int      = feols(f_int,      data = df_long, cluster = ~id),
+    int_age  = feols(f_int_age,  data = df_long, cluster = ~id)
+  )
+}
+
+# 2) Run categorical versions for each macro indicator
+models_gdp_cat   <- run_macro_cat("gdp_pc")
+models_unemp_cat <- run_macro_cat("unempl_rate")
+models_claim_cat <- run_macro_cat("claimant_k")
+models_cpih_cat  <- run_macro_cat("cpih_rate")
+
+```
+
+```{r macro categorical summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+list(
+  gdp_main_noage_cat   = models_gdp_cat$main,
+  gdp_main_age_cat     = models_gdp_cat$main_age,
+  gdp_int_noage_cat    = models_gdp_cat$int,
+  gdp_int_age_cat      = models_gdp_cat$int_age,
+
+  unemp_main_noage_cat = models_unemp_cat$main,
+  unemp_main_age_cat   = models_unemp_cat$main_age,
+  unemp_int_noage_cat  = models_unemp_cat$int,
+  unemp_int_age_cat    = models_unemp_cat$int_age,
+
+  claimant_main_noage_cat = models_claim_cat$main,
+  claimant_main_age_cat   = models_claim_cat$main_age,
+  claimant_int_noage_cat  = models_claim_cat$int,
+  claimant_int_age_cat    = models_claim_cat$int_age,
+
+  cpih_main_noage_cat  = models_cpih_cat$main,
+  cpih_main_age_cat    = models_cpih_cat$main_age,
+  cpih_int_noage_cat   = models_cpih_cat$int,
+  cpih_int_age_cat     = models_cpih_cat$int_age
+) |>
+  lapply(fixest::coeftable)
+
+```
+
+Across the categorical macro-level specifications, with the highest level of Britishness (category 7, “most British”) serving as the reference group, the estimated coefficients display a clear and monotonic path. All lower Britishness categories (1–6) are associated with systematically lower values of the dependent variable, indicating greater openness to immigration relative to the most strongly British respondents. Moreover, the magnitude of these differences increases as national identification weakens: the largest gaps are observed for the lowest Britishness categories (particularly categories 1 and 2), while the smallest differences appear for category 6. This pattern is highly stable across specifications with and without age controls and closely mirrors the ordinal structure of the underlying Britishness scale, confirming that the categorical coding preserves the substantive ordering present in the continuous measure.
+
+In the interaction specifications, macroeconomic conditions do not operate by shifting immigration attitudes uniformly across respondents. Instead, they systematically condition the Britishness gradient itself. Higher national unemployment is associated with a widening attitudinal gap between respondents with weak national identification and the most British group, as indicated by positive and statistically significant brit_cat\*unemployment interactions across most categories. A similar pattern emerges for claimant count: increases in national claimant intensity are associated with larger differences in immigration attitudes between lower Britishness categories and the reference group, reinforcing the role of labour-market stress as a contextual amplifier of identity-based differentiation. Inflation (CPIH) exhibits the strongest and most uniform moderation effect: all brit_cat\*CPIH interactions are positive and precisely estimated, indicating that periods of heightened cost-of-living pressure consistently sharpen attitudinal stratification along the Britishness dimension. GDP per capita also conditions the Britishness gradient, though less uniformly: positive interactions for selected categories (notably categories 2 and 4, with category 5) suggest that macroeconomic prosperity, like economic strain, alters the strength of the relationship between national identification and immigration attitudes, however in a more heterogeneous manner.
+
+Taken together, these results reinforce the macro-level main specifications. National economic conditions, whether reflecting labour-market stress, welfare reliance, inflationary pressure, or aggregate prosperity, do not exert direct, uniform effects on immigration attitudes once period effects are controlled for. Instead, they operate by modulating how strongly national identification structures attitudinal responses, amplifying differences between weakly and strongly identified individuals during periods of heightened economic salience. This conditioning role of macroeconomic context is fully consistent with the micro and meso-level findings.
+
 ### Description of macro variables {#macro-vars}
 
 The macro-level indicators used in the analysis capture objective national economic conditions in the United Kingdom. All macro variables are derived from official Office for National Statistics (ONS) sources and are merged to the British Election Study (BES) panel using fieldwork year, before being reshaped to align with the wave-based structure of the survey. The macro indicators are intended to proxy distinct dimensions of the national economic environment that may condition the relationship between national identification and attitudes toward immigration.
@@ -328,6 +403,3 @@ GDP per capita is measured using national accounts data from the ONS and capture
 **Inflation (CPIH).**
 
 Inflation is measured using the CPIH index, which captures changes in consumer prices including owner occupiers’ housing costs. CPIH data are obtained from ONS price statistics and are available at quarterly frequency. Quarterly values are aggregated to annual means to align with BES fieldwork years. CPIH serves as an indicator of cost-of-living pressures and purchasing power erosion, reflecting a distinct dimension of macroeconomic strain that is not directly captured by labour market indicators.
-
-
-------------------------------------------------------------------------
