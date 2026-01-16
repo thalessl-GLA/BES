@@ -144,3 +144,56 @@ iplot(
 ```
 
 Focusing on immigration self-placement (`immigSelf`), the outcome with the most extensive temporal coverage, the fixed-effects models indicate meaningful but non-monotonic variation in the relationship between national identity and immigration preferences over time. While the overall within-individual explanatory power of the model is small (within R² = 0.057), the wave-specific estimates reveal substantial heterogeneity in the strength of the Britishness effect across survey waves. As illustrated in the wave-interaction plot, the association between Britishness and restrictive immigration preferences intensifies in specific mid-period waves before attenuating in later waves, without exhibiting a persistent upward or downward trend. This pattern suggests episodic reinforcement rather than secular drift, consistent with the interpretation that changes in the nationalism–ATI relationship are driven by context-specific political or economic conditions rather than by time itself.
+
+Robustness Checks: Brittishness as categorical
+
+```{r rob check brit cat,  warning=FALSE, message=FALSE, echo=FALSE, echo=FALSE}
+
+panel_self_cat <- panel_self |>
+  mutate(
+    brit_cat = factor(
+      britishness,
+      levels = 1:7
+    )
+  )
+
+m_self_wave_cat <- feols(
+  immigSelf ~ i(wave, brit_cat, ref = "7") | id,
+  data = panel_self_cat,
+  cluster = "id"
+)
+
+
+panel_econ_cat <- panel_econ |>
+  mutate(
+    brit_cat = factor(
+      britishness,
+      levels = 1:7
+    )
+  )
+
+m_econ_wave_cat <- feols(
+  immigEcon ~ i(wave, brit_cat, ref = "7") | id,
+  data = panel_econ_cat,
+  cluster = "id"
+)
+
+panel_cult_cat <- panel_cult |>
+  mutate(
+    brit_cat = factor(britishness, levels = 1:7)
+  )
+
+m_cult_wave_cat <- feols(
+  immigCultural ~ i(wave, brit_cat, ref = "7") | id,
+  data = panel_cult_cat,
+  cluster = "id"
+)
+
+```
+
+```{r}
+summary(m_self_wave_cat)
+summary(m_econ_wave_cat)
+summary(m_cult_wave_cat)
+
+```
