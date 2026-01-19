@@ -13,7 +13,7 @@ library(fixest)
 library(haven)
 library(purrr)
 
-df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v2.rds")
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3.rds")
 
 DV_BASE   <- "immigSelf"
 BRIT_BASE <- "britishness"
@@ -305,6 +305,13 @@ Respondent fixed-effects models indicate that British national identity retains 
 # --- Load equivalised income (constructed externally; keyed by id + wave) ---
 eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds")
 
+eq_long <- eq_long %>%
+  mutate(
+    id   = as.character(id),
+    wave = as.integer(wave)
+  )
+
+
 # --- Build long panels using the same infrastructure as the income models ---
 # use make_long_with_income() but feed any income_base that exists across waves.
 # Here, the *original* income base only to create the canonical long structure,
@@ -494,6 +501,8 @@ m_risk_4 <- feols(
 )
 ```
 
+summary(m_risk_1) summary(m_risk_2) summary(m_risk_3) summary(m_risk_4)
+
 ```{r risk 1, echo=FALSE, warning=FALSE, message=FALSE}
 
 summary(m_risk_1)
@@ -509,7 +518,7 @@ Respondent fixed-effects models show no robust evidence that perceived unemploym
 
 ## Robustness Checks
 
-### Brittishness as Categorical 
+### Brittishness as Categorical
 
 ```{r 0.1, include=FALSE, echo=FALSE}
 
@@ -722,3 +731,340 @@ Re-estimating the unemployment risk models using Britishness as a categorical va
 Introducing interactions between unemployment risk and the categorical Britishness indicators provides only limited and weak evidence of moderation. While the interaction for Britishness category 2 reaches conventional significance levels and category 4 approaches marginal significance, these effects are isolated, small in magnitude, and not systematically ordered across identity categories. Moreover, the baseline Britishness coefficients remain large, stable, and highly statistically significant in all interacted specifications. Taken together, these results indicate that perceived unemployment risk does not meaningfully activate or dampen the attitudinal relevance of national identity at the individual level; any apparent interaction effects are fragile and do not alter the substantive interpretation.
 
 These findings are fully consistent with the results obtained when Britishness is modelled as a continuous variable in the original micro analysis. In both the continuous and categorical specifications, perceived unemployment risk fails to exert a robust within-person effect on immigration attitudes and does not systematically condition the influence of national identity. Modelling Britishness categorically strengthens this conclusion by demonstrating that the absence of an unemployment-risk effect is not driven by linearity assumptions about identity strength. Instead, the results show that even discrete shifts across identity categories do not translate into differential responsiveness to perceived unemployment risk. Together, the evidence reinforces the conclusion advanced in the BES_Micro section: individual-level economic insecurity, whether measured as income or perceived unemployment risk, does not meaningfully mediate the relationship between national identity and immigration attitudes, motivating the subsequent focus on meso- and macro-level economic contexts.
+
+### Other measures of nationalism
+
+As a further robustness check, now the britishness identity measure is replaced by the englishness one. Replicating the baseline specifications, we estimate respondent fixed-effects models with wave fixed effects, examine flexible wave-specific identity effects, and test whether individual economic resources and perceived unemployment risk condition the relationship between national identity and immigration self-placement. This approach allows us to assess whether the core findings hinge on the specific operationalization of national identity or instead reflect a more general identity-based mechanism.
+
+Substantively, the use of Englishness provides a theoretically meaningful contrast to Britishness. Whereas Britishness captures attachment to the British state and its civic–political boundaries, Englishness reflects a sub-national identity that is more closely associated with ethnic, cultural, and regional conceptions of belonging. Comparative work in nationalism and identity politics emphasizes that state-level and sub-state identities may differ markedly in their political salience and in the conditions under which they become attitudinally consequential. By substituting Englishness for Britishness while holding the empirical strategy constant, we directly test whether the observed micro-level relationships are driven by generic national identification or are specific to state-centered identity in the British context. This distinction is central to our theoretical argument and speaks directly to broader comparative debates on the political activation of national versus sub-national identities.
+
+To further contextualize the contrast between Britishness and Englishness observed in the micro-level models, we examine their descriptive evolution across BES waves. Figure X plots the wave-level mean of each identity on the original 1–7 scale, while Figure Y presents demeaned trends that highlight within-identity deviations from each identity’s overall mean. These descriptive patterns are not intended to provide causal estimates, but rather to illustrate the extent to which each identity exhibits temporal dynamism over the period covered by the BES panel.
+
+```{r eng_brit_plot, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(haven)
+library(stringr)
+
+ids_wave <- df %>%
+  select(
+    id,
+    matches("^britishnessW\\d+$"),
+    matches("^englishnessW\\d+$")
+  ) %>%
+  mutate(across(-id, ~ as.numeric(zap_labels(.)))) %>%
+  pivot_longer(
+    cols = -id,
+    names_to = c("identity", "wave"),
+    names_pattern = "(britishness|englishness)W(\\d+)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    identity = recode(identity,
+                      britishness = "Britishness",
+                      englishness = "Englishness"),
+    value = if_else(value %in% 1:7, value, NA_real_)
+  ) %>%
+  group_by(identity, wave) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
+
+ggplot(ids_wave, aes(wave, mean_value, color = identity)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Mean identity strength (1–7)",
+    color = "Identity",
+    title = "Evolution of Britishness and Englishness across BES waves"
+  )
+
+ids_wave_dm <- ids_wave %>%
+  group_by(identity) %>%
+  mutate(mean_dm = mean_value - mean(mean_value, na.rm = TRUE))
+
+ggplot(ids_wave_dm, aes(wave, mean_dm, color = identity)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Deviation from identity mean",
+    color = "Identity",
+    title = "Within-wave change: Britishness vs Englishness"
+  )
+
+
+```
+
+Two descriptive patterns emerge from Figures X and Y. First, Britishness is consistently higher on average than Englishness across all BES waves, despite both measures being coded on the same 1–7 scale. This gap reflects the broader and more encompassing character of British national identification, which remains the dominant identity label for most respondents throughout the period. At the same time, both identities display meaningful temporal variation rather than static trajectories. Mean levels of Britishness and Englishness rise and fall across survey waves in a non-monotonic manner, with several coincident shifts occurring around politically salient moments.
+
+The demeaned trends in Figure Y further clarify these dynamics. Once each identity is centered on its own mean, both Britishness and Englishness exhibit substantial within-wave deviations, indicating that respondents revise their reported levels of national identification over time rather than holding fixed attachments. Notably, Englishness does not appear uniformly flatter or more inert than Britishness. Instead, its within-wave changes are of comparable magnitude in several periods, suggesting that English identity is responsive to changing contexts rather than purely latent or background in nature.
+
+Importantly, these descriptive patterns are consistent with the micro-level regression results. The presence of non-trivial within-individual variation in Englishness aligns with its strong and robust association with immigration attitudes in the fixed-effects models. Conversely, while Britishness remains higher on average and exhibits clear temporal movement, its attitudinal relevance proves more sensitive to model specification and economic controls. Taken together, the figures underscore that differences between Britishness and Englishness lie not in the presence or absence of temporal dynamics, but in how shifts in these identities translate into political attitudes. Englishness, in particular, emerges as an identity dimension whose fluctuations are more tightly linked to changes in immigration self-placement, a pattern that becomes evident once both identities are measured and analysed on comparable footing.
+
+::: callout-note
+Britishness and Englishness are not measured in every BES wave. The figure plots wave-specific means for each identity in the waves in which it is observed, aligned to the common BES wave index for descriptive comparison.
+:::
+
+```{r englishness_base_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# -------------------------------------------------------------------
+# Englishness (continuous) — Base micro models
+# -------------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+panel_self_eng <- make_long_with_age(
+  df,
+  dv_base   = DV_BASE,
+  brit_base = ENG_BASE,   
+  time_base = TIME_BASE,
+  age_base  = AGE_BASE
+) %>%
+  rename(engl = brit) %>%
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+# Model 1: Englishness only
+m1_eng <- feols(
+  dv ~ engl | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Model 2: + age
+m2_eng <- feols(
+  dv ~ engl + age | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Flexible wave-specific effect (ref = W7)
+m_wave_eng <- feols(
+  dv ~ i(wave, engl, ref = 7) | id,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+```
+
+```{r englishness_base_models_results, message=FALSE, warning=FALSE}
+
+m1_eng
+m2_eng
+summary(m_wave_eng)
+```
+
+The baseline fixed-effects models indicate a strong and statistically significant negative association between Englishness and anti-immigration attitudes. In the specification including individual and wave fixed effects, a one-unit increase in Englishness is associated with a decrease of approximately 0.058 points in the dependent variable. This effect remains virtually unchanged when age is added as a time-varying control, while age itself does not reach conventional levels of statistical significance.
+
+Whereas Britishness and Englishness both exhibit a robust and statistically significant association with attitudes toward immigration, the magnitude and temporal dynamics of these effects differ in substantively meaningful ways. Across otherwise identical fixed-effects specifications, Englishness displays a consistently larger negative association with pro-immigration attitudes than Britishness, indicating that shifts in English national identification are more strongly translated into attitudinal change. Moreover, wave-specific estimates reveal that Englishness is particularly responsive to periods of heightened political salience, suggesting that it functions as a more politicized and context-sensitive form of national identification. By contrast, Britishness exhibits a comparatively more stable average association over time, consistent with its role as a broader and more institutionalized national identity. Taken together, these results imply that while both identities matter, Englishness operates as a sharper attitudinal cue in moments of political contestation, whereas Britishness reflects a more diffuse and enduring attachment.
+
+```{r englishness_income_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ------------------------------------------------------------
+# Englishness × Equivalised income (OECD: child weight = 0.3 and 0.5)
+# Correctly cleans Englishness (drops 9999 etc.)
+# ------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+# Build Englishness long panels, rename identity, CLEAN invalid codes, join eq income
+panel_eng_eq_noage <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = NULL
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = AGE_BASE
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+# Fail fast: must be 1–7 only (or NA)
+stopifnot(all(is.na(panel_eng_eq_noage$engl) | panel_eng_eq_noage$engl %in% 1:7))
+stopifnot(all(is.na(panel_eng_eq_age$engl)   | panel_eng_eq_age$engl   %in% 1:7))
+
+# Create analysis samples for both equivalence-weight variants
+panel_eng_eq03_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+
+panel_eng_eq05_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+
+if(nrow(panel_eng_eq03_noage) == 0 || nrow(panel_eng_eq03_age) == 0){
+  stop("No non-missing Englishness + income_eq_child03 observations after merge/cleaning.")
+}
+if(nrow(panel_eng_eq05_noage) == 0 || nrow(panel_eng_eq05_age) == 0){
+  stop("No non-missing Englishness + income_eq_child05 observations after merge/cleaning.")
+}
+
+# -----------------------------
+# Models: child weight = 0.3
+# -----------------------------
+m_eng_eq03_1 <- feols(
+  dv ~ engl + income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_2 <- feols(
+  dv ~ engl + income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+m_eng_eq03_3 <- feols(
+  dv ~ engl * income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_4 <- feols(
+  dv ~ engl * income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# -----------------------------
+# Models: child weight = 0.5
+# -----------------------------
+m_eng_eq05_1 <- feols(
+  dv ~ engl + income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_2 <- feols(
+  dv ~ engl + income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+m_eng_eq05_3 <- feols(
+  dv ~ engl * income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_4 <- feols(
+  dv ~ engl * income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# Output
+summary(m_eng_eq03_1); summary(m_eng_eq03_2); summary(m_eng_eq03_3); summary(m_eng_eq03_4)
+summary(m_eng_eq05_1); summary(m_eng_eq05_2); summary(m_eng_eq05_3); summary(m_eng_eq05_4)
+
+
+```
+
+Across all specifications using equivalised household income, Englishness retains a statistically significant and substantively meaningful association with attitudes toward immigration, while income itself does not. In both the lower-bound (child weight = 0.3) and upper-bound (child weight = 0.5) OECD equivalence scales, Englishness is consistently negative and statistically significant at conventional levels in models with and without age controls. The estimated magnitude of the Englishness coefficient remains stable across specifications, indicating that within-individual increases in English national identification are associated with less favourable immigration attitudes. By contrast, equivalised income exhibits no statistically significant direct effect, and the interaction terms between Englishness and income are consistently small and insignificant. These results suggest that the attitudinal association of Englishness operates independently of household income levels and is not meaningfully moderated by economic position as captured by equivalised income.
+
+Comparing the Englishness and Britishness specifications reveals a clear pattern. In both sets of models, equivalised household income does not display a statistically significant association with immigration attitudes, nor does it condition the relationship between national identification and attitudes toward immigration. The key difference lies in the identity coefficients themselves. In the Englishness models, national identification remains consistently negative and statistically significant once income is introduced, with a stable magnitude across specifications. By contrast, in the Britishness models estimated on the same samples and with identical controls, the coefficient on Britishness is small, statistically insignificant, and imprecisely estimated. This contrast indicates that conditioning on income does not attenuate the attitudinal relevance of Englishness, but it does render the Britishness association indistinguishable from zero. Together, these results suggest that Englishness captures a dimension of national identity that is more directly and robustly linked to immigration attitudes than Britishness, even when individual economic resources are explicitly accounted for.
+
+Taken together, the income robustness results highlight an important distinction between the two forms of national identification. While equivalised household income does not meaningfully shape immigration attitudes in either set of models, its inclusion clarifies differences in the attitudinal relevance of identity. Englishness remains a stable and statistically significant predictor once income is accounted for, whereas the association between Britishness and immigration attitudes is attenuated and becomes indistinguishable from zero. This pattern suggests that Englishness is less tightly bound to individuals’ material economic position and instead reflects a more politicised identity dimension, while Britishness appears more sensitive to the inclusion of economic controls. As a result, the Englishness–immigration relationship emerges as more robust to alternative economic specifications than its Britishness counterpart.
+
+```{r englishness_risk_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ============================================================
+# Perceived unemployment risk — Englishness robustness
+# (CLEAN version: Englishness + risk properly recoded)
+# ============================================================
+
+ENG_BASE  <- "englishness"
+RISK_BASE <- "riskUnemployment"
+
+# --- Build long panels (no age / with age) ---
+panel_risk_noage_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = NULL
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+panel_risk_age_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = AGE_BASE
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+# --- Fail fast sanity checks ---
+stopifnot(all(is.na(panel_risk_noage_eng$engl) | panel_risk_noage_eng$engl %in% 1:7))
+stopifnot(all(is.na(panel_risk_age_eng$engl)   | panel_risk_age_eng$engl   %in% 1:7))
+
+# --- Models: main effects ---
+m_risk_eng_1 <- feols(
+  dv ~ engl + risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_2 <- feols(
+  dv ~ engl + risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Models: moderation (interaction) ---
+m_risk_eng_3 <- feols(
+  dv ~ engl * risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_4 <- feols(
+  dv ~ engl * risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Output ---
+summary(m_risk_eng_1)
+summary(m_risk_eng_2)
+summary(m_risk_eng_3)
+summary(m_risk_eng_4)
+
+```
+
+The Englishness-based models indicate a strong and robust association between national identification and immigration attitudes, alongside a modest but statistically significant role for perceived unemployment risk. Across specifications with individual and wave fixed effects, Englishness is consistently negative and highly statistically significant, with coefficients that remain stable when age is included as a control. In contrast to the income models, perceived unemployment risk enters positively and significantly in the main-effects specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes. However, when allowing for an interaction between Englishness and perceived unemployment risk, neither the interaction term nor the main effect of risk reaches statistical significance. This suggests that while perceived economic insecurity is directly related to immigration attitudes among respondents identifying as English, it does not systematically condition the effect of Englishness itself.
+
+The contrast between the Englishness and Britishness specifications highlights an important asymmetry in how perceived economic insecurity relates to immigration attitudes. In the Britishness models, perceived unemployment risk does not exert a statistically significant main effect, nor does it condition the association between Britishness and immigration attitudes. By contrast, in the Englishness models, perceived unemployment risk enters as a positive and statistically significant main effect in the baseline specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes among respondents for whom Englishness is salient. At the same time, the interaction between Englishness and risk remains statistically insignificant, suggesting that economic insecurity does not systematically amplify or dampen the effect of Englishness itself. This pattern differs from the income robustness results, where economic resources were unrelated to immigration attitudes under both identity measures. Taken together, the findings suggest that subjective perceptions of economic vulnerability, rather than objective income position, are selectively linked to immigration attitudes in the context of English national identification, while remaining largely irrelevant when Britishness is the operative identity.
