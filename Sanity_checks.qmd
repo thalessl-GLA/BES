@@ -1,10 +1,6 @@
 ---
 title: "Appendix: Temporal Stability of the Nationalism–ATI Relationship"
 format:
-  pdf:
-    number-sections: true
-    toc: false
-    fontsize: 11pt
   html:
     number-sections: true
 execute:
@@ -27,10 +23,11 @@ library(stringr)
 library(lubridate)
 library(fixest)
 library(knitr)
+library(purrr)
 
 # Load frozen dataset
 
-BES <- readRDS("BES_subset_panel_full_v1.rds")
+BES <- readRDS("BES_subset_panel_full_v3.rds")
 
 get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
 
@@ -70,9 +67,9 @@ filter(!is.na(.data[[outcome_base]]),
 }
 ```
 
-1\. Economic ATI: Britishness × time
+## Economic ATI
 
-```{r 1, warning=FALSE, message=FALSE, echo=FALSE}
+```{r econ ATI, warning=FALSE, message=FALSE, echo=FALSE}
 panel_econ <- make_long_panel(BES, "immigEcon")
 
 m_econ_time <- feols(
@@ -81,16 +78,6 @@ data = panel_econ,
 cluster = "id"
 )
 
-summary(m_econ_time)
-
-```
-
-This model estimates the within-respondent relationship between national identity and economic attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The inclusion of individual fixed effects ensures that identification relies exclusively on within-person change over time, netting out all time-invariant characteristics. The model is estimated on a large panel of 82,988 respondents. While the overall fit is high due to the absorption of stable individual differences (adjusted R² = 0.72), the within-respondent explanatory power of the model is very limited (within R² = 0.003). This indicates that temporal variation explains only a small share of changes in economic ATI within individuals. Importantly, this pattern is consistent with the interpretation that the association between Britishness and economic immigration attitudes is broadly stable over time, rather than driven by secular temporal drift, motivating the analysis of contextual moderators in subsequent models.
-
-2\. Economic ATI: Britishness × wave (flexible)
-
-```{r 2, warning=FALSE, message=FALSE, echo=FALSE}
-
 m_econ_wave <- feols(
 immigEcon ~ i(wave, britishness) | id,
 data = panel_econ,
@@ -98,14 +85,19 @@ cluster = "id"
 )
 
 summary(m_econ_wave)
+summary(m_econ_time)
 
 ```
 
-This specification allows the effect of Britishness on economic attitudes toward immigration to vary flexibly across survey waves by interacting national identity with wave indicators, while retaining respondent fixed effects and clustering standard errors at the individual level. Compared to the linear time-interaction model, this more flexible specification explains substantially more within-respondent variation (within R² = 0.12), indicating meaningful heterogeneity in the strength of the nationalism–economic ATI relationship across political periods. Importantly, these wave-specific effects do not exhibit a monotonic trend over time; instead, they fluctuate across waves, suggesting episodic strengthening and weakening of the association rather than secular drift. This pattern reinforces the interpretation that temporal variation in economic ATI is context-dependent and motivates the introduction of economic conditions as moderators in subsequent analyses.
+These first models examine whether the association between national identity and attitudes toward immigration aimed at economics gains varies systematically over time. Using i`immigEcon` as the outcome, I estimate respondent fixed-effects models that interact Britishness with calendar time and, alternatively, allow the effect of Britishness to vary freely across survey waves. In the linear time-interaction specification, Britishness does not exhibit a statistically significant interaction with calendar year. The coefficient on the Britishness × year term is small and imprecisely estimated, indicating no evidence of monotonic temporal drift in the relationship between national identity and economic ATI. While the year term itself is positive and statistically significant, capturing a general within-individual trend toward more permissive economic immigration attitudes over time, this trend does not differ systematically by levels of Britishness. Consistent with this interpretation, the within-individual explanatory power of the model is very limited (within R² = 0.003), suggesting that linear time dynamics account for only a negligible share of attitudinal change within respondents.
 
-3\. Cultural ATI: Britishness × time
+Turning to a more flexible specification that interacts Britishness with survey-wave indicators, allowing the strength of the nationalism–economic ATI relationship to vary non-parametrically across political periods. This model reveals substantial and highly statistically significant heterogeneity across waves. In early survey waves, Britishness is strongly and negatively associated with economic immigration attitudes, indicating that increases in national identification coincide with more restrictive views on immigration’s economic effects. This association attenuates sharply in mid-period waves and temporarily reverses sign in some cases, before re-emerging in later waves with renewed strength. Importantly, these fluctuations do not follow a monotonic pattern over time. Instead, the wave-specific coefficients alternate between periods of strong, weak, and even negligible association.
 
-```{r 3, warning=FALSE, message=FALSE, echo=FALSE}
+Taken together, these results indicate that the link between national identity and economic immigration attitudes is structurally stable but context-dependent in magnitude. Rather than drifting steadily over time, the association strengthens and weakens in response to specific political or economic periods.
+
+## Cultural ATI: Britishness × time
+
+```{r cult ATI, warning=FALSE, message=FALSE, echo=FALSE}
 
 panel_cult <- make_long_panel(BES, "immigCultural")
 
@@ -115,50 +107,75 @@ data = panel_cult,
 cluster = "id"
 )
 
+m_cult_wave <- feols(
+immigCultural ~ i(wave, britishness) | id,
+data = panel_cult,
+cluster = "id"
+)
+
 summary(m_cult_time)
+summary(m_cult_wave)
 
 ```
 
-This model examines the within-respondent relationship between national identity and cultural attitudes toward immigration using a respondent fixed-effects specification with clustered standard errors. The analysis is based on 71,802 respondents. As in the other specifications, individual fixed effects absorb stable personal characteristics, yielding a high adjusted R² (0.76). However, the within-respondent explanatory power remains modest (within R² = 0.022), indicating that calendar time and its interaction with Britishness account for only a limited share of changes in cultural ATI within individuals. This suggests that, while the nationalism–cultural ATI relationship may evolve gradually over time, it does not exhibit strong mechanical drift, reinforcing the interpretation that temporal variation is relatively constrained and likely shaped by contextual factors rather than by time itself.
+I next assess the temporal stability of the relationship between national identity and attitudes toward immigration related to cultural implications using respondent fixed-effects models. In contrast to the economic ATI results, the linear time-interaction specification provides evidence of a modest but statistically significant temporal evolution in the Britishness–cultural ATI relationship. While Britishness is negatively associated with cultural immigration attitudes on average, the positive and statistically significant Britishness × year interaction indicates that this negative association weakens over time. Substantively, this implies that within individuals, increases in British national identification are associated with progressively less restrictive cultural immigration attitudes as calendar time advances. However, despite statistical significance, the explanatory contribution of this linear temporal interaction remains limited: the within-individual R² is low (0.022), indicating that linear time dynamics explain only a small fraction of attitudinal change within respondents.
 
-4\. Immigration preference: Britishness × time
+To probe this temporal pattern more flexibly, a wave-specific interaction model allows the association between Britishness and cultural ATI to vary freely across survey waves. This specification reveals substantial heterogeneity in the strength and direction of the relationship over time. In early waves, Britishness is strongly and negatively associated with cultural immigration attitudes, indicating a clear alignment between stronger national identification and more restrictive cultural views. This association attenuates markedly in mid-period waves and becomes statistically insignificant in some cases, before reversing sign and turning positive in later waves. In these later periods, higher Britishness is associated with *less* restrictive cultural immigration attitudes. Importantly, this reversal is not monotonic: the wave-specific coefficients fluctuate across periods, with renewed negative associations emerging in later waves.
 
-```{r 4, warning=FALSE, message=FALSE, echo=FALSE}
+Taken together, these results suggest that, unlike economic ATI, the cultural dimension exhibits both greater temporal malleability and clearer evidence of directional change in the association with national identity. Nevertheless, this evolution is irregular and context-dependent, reinforcing the interpretation that changes in the nationalism–ATI relationship could reflect specific political and cultural moments rather than a simple linear redefinition of national identity over time.
+
+## Immigration preference
+
+```{r Immig self ATI, warning=FALSE, message=FALSE, echo=FALSE}
 
 panel_self <- make_long_panel(BES, "immigSelf")
 
 m_self_wave <- feols(
-  immigSelf ~ i(wave, britishness, ref = 7) | id,
+  immigSelf ~ i(wave, britishness) | id,
   data = panel_self,
   cluster = "id"
 )
 
+m_self_time <- feols(
+immigSelf ~ britishness * year | id,
+data = panel_self,
+cluster = "id"
+)
+
 summary(m_self_wave)
+summary(m_self_time)
 
 iplot(
   m_self_wave,
-  xlab = "Wave",
-  main = "Wave-specific effect of Britishness on immigSelf (ref = W7)"
+  xlab = "BES Wave",
+  ylab = "Within-individual effect of Britishness on immigration attitudes",
+  main = "Wave-specific effect of Britishness on immigration self-placement",
+  ref.line = 0
 )
 
 ```
 
-Focusing on immigration self-placement (`immigSelf`), the outcome with the most extensive temporal coverage, the fixed-effects models indicate meaningful but non-monotonic variation in the relationship between national identity and immigration preferences over time. While the overall within-individual explanatory power of the model is small (within R² = 0.057), the wave-specific estimates reveal substantial heterogeneity in the strength of the Britishness effect across survey waves. As illustrated in the wave-interaction plot, the association between Britishness and restrictive immigration preferences intensifies in specific mid-period waves before attenuating in later waves, without exhibiting a persistent upward or downward trend. This pattern suggests episodic reinforcement rather than secular drift, consistent with the interpretation that changes in the nationalism–ATI relationship are driven by context-specific political or economic conditions rather than by time itself.
+The final models looks into the main Depedent Variable, examining the stability of the relationship between national identity and immigration self-placement, the outcome with the broadest temporal coverage and greatest relevance for overall immigration preferences. The linear time-interaction specification indicates statistically significant temporal change in the association between Britishness and immigration self-placement. While Britishness is positively associated with more restrictive self-placement on immigration on average, the negative and statistically significant Britishness × year interaction suggests that this association weakens over calendar time. Substantively, this implies that within individuals, increases in British national identification become less strongly associated with restrictive immigration self-placement in later periods. However, despite statistical significance, the explanatory power of this linear temporal interaction is extremely limited: the within-respondent R² is just 0.002, indicating that linear time trends account for a negligible share of within-individual attitudinal change.
 
-Robustness Checks: Brittishness as categorical
+To assess whether this apparent temporal evolution reflects smooth secular change or more episodic dynamics, we estimate a flexible wave-specific interaction model. This specification reveals pronounced heterogeneity in the strength and direction of the Britishness–immigration self-placement relationship across survey waves. In early and late waves, Britishness is strongly and consistently associated with more restrictive immigration preferences, with large negative coefficients that are precisely estimated. In contrast, during mid-period waves the association attenuates substantially and in some cases becomes statistically indistinguishable from zero or even weakly positive. These fluctuations are clearly visible in the wave-specific estimates, which show sharp shifts rather than gradual drift.
 
-```{r rob check brit cat,  warning=FALSE, message=FALSE, echo=FALSE, echo=FALSE}
+These results indicate that the relationship between Britishness and immigration self-placement is structurally stable in sign and overall magnitude but exhibits substantial context-dependent variation in strength. This pattern reinforces the interpretation that changes over time reflect episodic political or economic environments, such as salient electoral cycles or immigration debates, rather than a gradual redefinition of national identity or immigration preferences themselves.
+
+## Robustness Checks: 
+
+### Brittishness as categorical
+
+```{r rob check brit cat,  warning=FALSE, message=FALSE, include=FALSE, echo=FALSE}
 
 panel_self_cat <- panel_self |>
   mutate(
     brit_cat = factor(
       britishness,
-      levels = 1:7
-    )
+      levels = 1:7) |> relevel(ref = "7")
   )
 
 m_self_wave_cat <- feols(
-  immigSelf ~ i(wave, brit_cat, ref = "7") | id,
+  immigSelf ~ i(wave, brit_cat) | id,
   data = panel_self_cat,
   cluster = "id"
 )
@@ -168,34 +185,236 @@ panel_econ_cat <- panel_econ |>
   mutate(
     brit_cat = factor(
       britishness,
-      levels = 1:7
-    )
+      levels = 1:7) |> relevel(ref = "7")
   )
 
 m_econ_wave_cat <- feols(
-  immigEcon ~ i(wave, brit_cat, ref = "7") | id,
+  immigEcon ~ i(wave, brit_cat) | id,
   data = panel_econ_cat,
   cluster = "id"
 )
 
 panel_cult_cat <- panel_cult |>
   mutate(
-    brit_cat = factor(britishness, levels = 1:7)
+    brit_cat = factor
+    (britishness, 
+      levels = 1:7) |> relevel(ref = "7")
   )
 
 m_cult_wave_cat <- feols(
-  immigCultural ~ i(wave, brit_cat, ref = "7") | id,
+  immigCultural ~ i(wave, brit_cat) | id,
   data = panel_cult_cat,
   cluster = "id"
 )
 
 ```
 
-```{r}
+```{r rob check brit cat results, echo=FALSE, warning=FALSE, message=FALSE}
 summary(m_self_wave_cat)
 summary(m_econ_wave_cat)
 summary(m_cult_wave_cat)
 
 ```
 
-As an additional robustness check, we re-estimate the temporal stability models treating Britishness as a categorical variable, with the highest category (7, “most British”) as the reference group. This specification relaxes the implicit linearity assumption embedded in the continuous measure and allows for non-parametric heterogeneity across identity intensities. The results strongly corroborate the main findings. Across outcomes, wave-specific coefficients reveal a clear and systematic ordering: lower Britishness categories are consistently associated with more permissive immigration attitudes relative to the most British group, with larger differences concentrated among the weakest identity categories (1–3) and progressively smaller gaps for intermediate categories. Importantly, these categorical differentials vary across survey waves but do not display a monotonic temporal trend. Instead, periods of intensified differentiation—particularly in mid-period waves—are followed by partial attenuation in later waves, mirroring the episodic pattern observed in the continuous specifications. This holds for immigration self-placement, economic ATI, and cultural ATI alike, despite differences in scale and temporal coverage. Overall, modeling Britishness categorically confirms that the nationalism–ATI relationship is temporally stable in structure but context-dependent in magnitude, reinforcing the interpretation that fluctuations over time reflect episodic political or economic environments rather than secular drift in national identity itself.
+As a robustness check, the wave-specific categorical specification (with respondent fixed effects and clustering at the respondent level) shows that the identity gradient in immigration self-placement varies meaningfully across survey waves. Relative to the highest Britishness category (7), lower categories typically differ in systematic ways, and the magnitude of these differences shifts over time. In early waves (e.g., waves 7–10), several lower categories already display positive and statistically significant deviations from the reference group (e.g., categories 1–2), with effects that tend to be largest among the weakest identifiers. In later waves, wave-specific coefficients become substantially larger across most categories (notably around waves 14–23), before attenuating again in subsequent waves (e.g., waves 25–30). Across waves, the pattern is therefore episodic rather than monotonic: identity-based differentiation strengthens sharply in some periods and weakens in others, consistent with a temporally stable *ordering* of categories but time-varying *intensity* of the nationalism–ATI relationship.
+
+These categorical results corroborate the continuous wave-interaction model in two key respects. First, both specifications imply that the nationalism–ATI relationship is not constant across waves: the continuous model’s wave-specific slope switches from strongly negative in early waves (e.g., waves 7–13) to near-zero and then positive in a mid-period cluster (roughly waves 16–23), before turning negative again in later waves (e.g., waves 25–30). The categorical model mirrors this same temporal structure by showing large swings in the gap between identity categories across the panel rather than a steady drift. Second, the categorical specification demonstrates that this temporal variation is not an artifact of assuming linearity in Britishness: it persists when Britishness is treated non-parametrically, and it is typically most pronounced among the lowest identity categories (1–3), which often exhibit the largest deviations from the reference group. Taken together, the continuous and categorical wave specifications point to the same conclusion: the nationalism–ATI association is structurally ordered by identity intensity, but its strength is period-specific rather than governed by a single secular trend.
+
+### Other forms of Nationalism: Englishness
+
+```{r rob check englishness,  warning=FALSE, message=FALSE, echo=FALSE, echo=FALSE, include=FALSE}
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+zap_if_labelled <- function(x){
+  if (inherits(x, "haven_labelled")) return(zap_labels(x))
+  x
+}
+
+# ------------------------------------------------------------
+# Core panel builder (Outcome × Identity × Time)
+#   - identity_base: "britishness" or "englishness"
+#   - CLEANING:
+#       * identity must be numeric and in 1:7
+#       * for englishness, this drops NA and DK=9999 (and any other invalid codes)
+# ------------------------------------------------------------
+make_long_panel_identity <- function(df, outcome_base, identity_base) {
+
+  w_out  <- waves_available(df, outcome_base)
+  w_id   <- waves_available(df, identity_base)
+  w_time <- waves_available(df, "starttime")
+
+  waves <- Reduce(intersect, list(w_out, w_id, w_time))
+  if(length(waves) < 3) stop("Too few overlapping waves for outcome/identity/starttime.")
+
+  use_cols <- c(
+    paste0(outcome_base,  "W", waves),
+    paste0(identity_base, "W", waves),
+    paste0("starttimeW",  waves)
+  )
+
+  df_long <- df |>
+    select(id, any_of(use_cols)) |>
+    mutate(across(any_of(use_cols), zap_if_labelled)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      # parse starttime robustly
+      starttime_chr = as.character(starttime),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(outcome = all_of(outcome_base),
+           identity = all_of(identity_base)) |>
+    mutate(
+      outcome  = as.numeric(outcome),
+      identity = as.numeric(identity),
+      year     = as.numeric(year)
+    ) |>
+    filter(
+      !is.na(outcome),
+      !is.na(identity),
+      identity %in% 1:7,      # <<<<<< KEY CLEANING (drops DK=9999 etc.)
+      !is.na(year),
+      !is.na(wave)
+    )
+
+  df_long
+}
+
+# ============================================================
+# A) Englishness temporal stability checks
+# Outcomes: immigSelf (primary), immigEcon, immigCultural (robustness)
+# ============================================================
+
+# ------------------------------------------------------------
+# 1) Economic ATI: Englishness × year 
+# ------------------------------------------------------------
+panel_econ_eng <- make_long_panel_identity(BES, "immigEcon", "englishness")
+
+m_econ_time_eng <- feols(
+  outcome ~ identity * year | id,
+  data    = panel_econ_eng,
+  cluster = "id"
+)
+
+m_econ_wave_eng <- feols(
+  outcome ~ i(wave, identity) | id,
+  data    = panel_econ_eng,
+  cluster = "id"
+)
+
+# ------------------------------------------------------------
+# 3) Cultural ATI: Englishness × year (monotonic drift test)
+# ------------------------------------------------------------
+panel_cult_eng <- make_long_panel_identity(BES, "immigCultural", "englishness")
+
+m_cult_time_eng <- feols(
+  outcome ~ identity * year | id,
+  data    = panel_cult_eng,
+  cluster = "id"
+)
+
+m_cult_wave_eng <- feols(
+  outcome ~ i(wave, identity) | id,
+  data    = panel_cult_eng,
+  cluster = "id"
+)
+
+# ------------------------------------------------------------
+# 4) Immigration self-placement: Englishness × wave (primary, flexible)
+# ------------------------------------------------------------
+panel_self_eng <- make_long_panel_identity(BES, "immigSelf", "englishness")
+
+m_self_time_eng <- feols(
+  outcome ~ identity * year | id,
+  data    = panel_self_eng,
+  cluster = "id"
+)
+
+m_self_wave_eng <- feols(
+  outcome ~ i(wave, identity) | id,
+  data    = panel_self_eng,
+  cluster = "id"
+)
+
+# ============================================================
+# B) Robustness: Englishness as categorical (ref = 7)
+#     (relaxes linearity; mirrors your britishness robustness)
+# ============================================================
+
+# -------- immigSelf (categorical) --------
+panel_self_eng_cat <- panel_self_eng |>
+  mutate(
+    id_cat = factor(identity, levels = 1:7) |> relevel(ref = "7")
+  )
+
+m_self_wave_eng_cat <- feols(
+  outcome ~ i(wave, id_cat) | id,
+  data    = panel_self_eng_cat,
+  cluster = "id"
+)
+
+# -------- immigEcon (categorical) --------
+panel_econ_eng_cat <- panel_econ_eng |>
+  mutate(
+    id_cat = factor(identity, levels = 1:7) |> relevel(ref = "7")
+  )
+
+m_econ_wave_eng_cat <- feols(
+  outcome ~ i(wave, id_cat) | id,
+  data    = panel_econ_eng_cat,
+  cluster = "id"
+)
+# -------- immigCultural (categorical) --------
+panel_cult_eng_cat <- panel_cult_eng |>
+  mutate(
+    id_cat = factor(identity, levels = 1:7) |> relevel(ref = "7")
+  )
+
+m_cult_wave_eng_cat <- feols(
+  outcome ~ i(wave, id_cat) | id,
+  data    = panel_cult_eng_cat,
+  cluster = "id"
+)
+```
+
+```{r rob check englishness results, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+summary(m_econ_time_eng)
+summary(m_econ_wave_eng)
+summary(m_cult_time_eng)
+summary(m_cult_wave_eng)
+summary(m_self_time_eng)
+summary(m_self_wave_eng)
+
+iplot(
+  m_self_wave_eng,
+  xlab = "Wave",
+  main = "Wave-specific effect of Englishness on immigSelf (ref = 7)"
+)
+
+summary(m_self_wave_eng_cat)
+summary(m_econ_wave_eng_cat)
+summary(m_cult_wave_eng_cat)
+```
+
+Replacing Britishness with Englishness yields the same substantive temporal pattern across outcomes, with a weak linear “year” interaction in within-person terms, but clear episodic heterogeneity across waves. In the linear specifications, the identity–time interaction is statistically significant for *immigEcon* and for *immigSelf* , indicating a modest non-zero average drift when time is forced to be linear. For *immigCultural*, the linear interaction is also negative and significant. However, as with the Britishness models, the flexible wave specifications are more informative: for *immigEcon* and *immigCultural*, wave-specific identity slopes move from clearly negative in early waves (e.g., waves 1–4) to positive in mid waves (e.g., waves 14–20), and back toward negative in later waves (e.g., waves 25–30 for *immigEcon*, wave 27 for *immigCultural*). For *immigSelf*, the wave-specific Englishness slopes are strongly negative in early waves (7–13), become less negative through waves 14–17, and then intensify again in later waves (25–30), with only limited evidence of positive mid-period coefficients (wave 23 positive; waves 20–22 not). Overall, Englishness reproduces the key conclusion of the temporal-stability appendix: the identity–ATI relationship is not characterized by monotonic secular drift, but by wave-contingent strengthening and weakening.
+
+Relative to Britishness, the Englishness robustness check does not change the qualitative inference, but it does shift the *shape* and *timing* of the mid-period inflection in ways that are substantively informative. For *immigEcon*, both identities show the same broad “negative early → positive mid → negative late” structure in the wave models, but Englishness tends to be more negative in the early waves and less positive at the mid-period peak. Correspondingly, the linear time interaction is non-significant for Britishness but negative and highly significant for Englishness, implying that, when forced into a linear form, Englishness contains more detectable average drift even though the wave model still indicates episodic dynamics. For *immigCultural*, the contrast is sharper: Britishness shows a positive identity×year interaction , whereas Englishness shows a negative interaction, even while the wave models for both identities display the same sign-switching structure across periods (negative early, positive mid, negative late). Finally, for *immigSelf*, the wave models are again closely aligned in structure, with Englishness generally more negative than Britishness in early and late waves, while the linear interaction is negative and significant in both cases. Taken together, these comparisons support the strongest version of your robustness claim: the evidence of temporally episodic (rather than monotonic) variation in the identity–ATI relationship is not an artifact of the Britishness measure, and the Englishness models reproduce the same temporal architecture while modestly altering magnitudes and, in the linear specifications, the sign/salience of average drift.
+
+When Englishness is operationalised categorically (seven ordered categories) and interacted with wave, the results closely mirror the Britishness-categorical robustness check: within each wave, lower identity categories are typically associated with higher immigration self-placement values relative to the highest identity category (the omitted baseline), producing a broadly monotonic “dose–response” gradient that is precisely estimated in most waves. The magnitude of the category gaps is strongly time-varying, with particularly large separations in the mid-panel period, and a clear weakening in later waves (e.g., wave 30, where the lowest category remains positive and significant but the “near-top” category becomes small and statistically indistinguishable from the baseline). This temporal modulation is substantively consistent with the continuous specifications, showing that identity is not simply a stable background correlate but an association whose strength fluctuates across periods. Compared to Britishness, the Englishness-categorical estimates suggest slightly stronger early-wave separations (e.g., waves 7–10 show robust positive gaps across nearly all categories) and a more pronounced late-wave attenuation at the top end of the scale (category 6 vs 7 becomes very small by wave 30), but the overarching conclusion is the same across both identities: the categorical operationalisation confirms that within-individual changes in national identification track meaningful within-individual shifts in immigration self-placement, and that this relationship is episodic rather than time-invariant.
