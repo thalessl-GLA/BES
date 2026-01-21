@@ -131,7 +131,7 @@ In baseline respondent fixed-effects models with wave fixed effects, increases i
 ```{r flexible wave, echo=FALSE, warning=FALSE, message=FALSE}
 
 m_wave <- feols(
-  dv ~ i(wave, brit, ref = 7) | id,
+  dv ~ i(wave, brit) | id,
   data = panel_self,
   cluster = "id"
 )
@@ -141,7 +141,7 @@ summary(m_wave)
 iplot(
   m_wave,
   xlab = "Wave",
-  main = "Wave-specific effect of Britishness on immigration self-placement (ref = W7)"
+  main = "Wave-specific effect of Britishness on immigration self-placement"
 )
 
 ```
