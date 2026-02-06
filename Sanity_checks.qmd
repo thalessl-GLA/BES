@@ -161,7 +161,7 @@ To assess whether this apparent temporal evolution reflects smooth secular chang
 
 These results indicate that the relationship between Britishness and immigration self-placement is structurally stable in sign and overall magnitude but exhibits substantial context-dependent variation in strength. This pattern reinforces the interpretation that changes over time reflect episodic political or economic environments, such as salient electoral cycles or immigration debates, rather than a gradual redefinition of national identity or immigration preferences themselves.
 
-## Robustness Checks: 
+## Robustness Checks:
 
 ### Brittishness as categorical
 

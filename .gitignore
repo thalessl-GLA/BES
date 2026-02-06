@@ -47,3 +47,35 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+# macOS
+.DS_Store
+
+# RStudio / R
+.Rproj.user/
+.Rhistory
+.RData
+
+# Quarto / RMarkdown output
+*.html
+*.pdf
+*_files/
+**/*_files/
+.quarto/
+.quarto_cache/
+
+# Figures / plots
+*.png
+*.jpg
+*.jpeg
+
+# Data (keep OUT of git unless you intentionally commit small examples)
+*.rds
+*.csv
+*.xlsx
+*.sav
+*.dta
+
+# Word
+*.docx
+
+
