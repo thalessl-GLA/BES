@@ -1,0 +1,1070 @@
+---
+title: "BES_Micro"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3.rds")
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"   
+
+get_wave_num2 <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available2 <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num2)))
+}
+
+make_long_with_age <- function(df,
+                               dv_base   = "immigSelf",
+                               brit_base = "britishness",
+                               time_base = "starttime",
+                               age_base  = "age"){
+
+  w_dv   <- waves_available2(df, dv_base)
+  w_brit <- waves_available2(df, brit_base)
+  w_time <- waves_available2(df, time_base)
+  w_age  <- waves_available2(df, age_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_age))
+  if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, starttime, and age.")
+
+  dv_cols   <- paste0(dv_base,   "W", waves)
+  brit_cols <- paste0(brit_base, "W", waves)
+  time_cols <- paste0(time_base, "W", waves)
+  age_cols  <- paste0(age_base,  "W", waves)
+
+  # Drop haven labels to avoid pivot_longer attribute conflicts
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),   ~ as.numeric(zap_labels(.x))),
+      across(all_of(brit_cols), ~ as.numeric(zap_labels(.x))),
+      across(all_of(age_cols),  ~ as.numeric(zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id, all_of(dv_cols), all_of(brit_cols), all_of(time_cols), all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv   = all_of(dv_base),
+      brit = all_of(brit_base),
+      age  = all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# Quick sanity print
+panel_self |>
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    min_wave = min(wave),
+    max_wave = max(wave),
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE),
+    age_min = min(age, na.rm = TRUE),
+    age_max = max(age, na.rm = TRUE)
+  )
+```
+
+I begin by examining the relationship between national identity and attitudes toward immigration at the individual level, using the British Election Study (BES) Internet Panel. The micro-level analysis focuses on within-person changes in immigration self-placement and assesses whether individual economic circumstances condition the attitudinal relevance of British national identification. By exploiting the longitudinal structure of the BES, all models are estimated using respondent fixed effects and wave fixed effects. Individual fixed effects absorb all time-invariant characteristics, including stable ideological orientations, cohort membership, baseline nationalism, and unobserved personal traits, ensuring that identification derives exclusively from changes within the same individuals over time. Wave fixed effects capture common national shocks and period-specific influences, such as Brexit-related events, macroeconomic fluctuations, and the COVID-19 pandemic, thereby isolating micro-level associations net of broader temporal trends. Standard errors are clustered at the respondent level to account for serial correlation arising from repeated observations of individuals across waves.
+
+At this level, three classes of individual economic indicators are estimated: self-reported household income, equivalised household income adjusted for household composition, and perceived risk of unemployment. This strategy allows us to distinguish between material resources, economic insecurity, and subjective risk exposure as potential mechanisms linking national identity to immigration attitudes. The micro analysis thus provides a baseline test of whether changes in individual economic position activate national identity in shaping immigration preferences, or whether such dynamics are better understood as operating through broader contextual economic conditions. The findings at this level directly motivate the subsequent meso-level analysis, which shifts attention from individual circumstances to objectively measured local economic environments.
+
+## Micro level results
+
+### Base Models
+
+```{r models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Model 1
+
+m1 <- feols(
+  dv ~ brit | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+m1
+
+# Model 2
+
+
+  m2 <- feols(
+    dv ~ brit + age | id + wave,
+    data = panel_self,
+    cluster = "id"
+  )
+m2
+
+```
+
+In baseline respondent fixed-effects models with wave fixed effects, increases in British national identity are associated with small but statistically precise shifts toward more restrictive immigration self-placement. The magnitude of the unconditional effect is modest, consistent with the expectation that national identity alone does not mechanically drive attitudinal change.
+
+```{r flexible wave, echo=FALSE, warning=FALSE, message=FALSE}
+
+m_wave <- feols(
+  dv ~ i(wave, brit, ref = 7) | id,
+  data = panel_self,
+  cluster = "id"
+)
+
+summary(m_wave)
+
+iplot(
+  m_wave,
+  xlab = "Wave",
+  main = "Wave-specific effect of Britishness on immigration self-placement (ref = W7)"
+)
+
+```
+
+Allowing the effect of British national identity to vary flexibly across waves reveals substantial temporal heterogeneity in the association between Britishness and immigration self-placement. As shown in Figure X and Table X, the within-individual effect of Britishness is negative in the early BES waves (W8–W10), indicating a modest association with more restrictive immigration preferences during the immediate post-referendum period. From approximately W14 through W23, however, the effect becomes strongly positive and statistically significant, peaking in W23, before attenuating and turning negative again in later waves (W26–W30). This non-monotonic pattern indicates that the influence of national identity on immigration attitudes is not temporally stable but instead varies sharply across political contexts. Importantly, these estimates are obtained from respondent fixed-effects models with age controls, ensuring that the observed variation reflects within-person changes rather than compositional differences across waves. Taken together, the results suggest that Britishness does not exert a constant influence on immigration self-placement; rather, its political relevance is episodic and context-dependent, consistent with the theoretical expectation that national identity becomes attitudinally consequential under specific macro-political and economic conditions rather than through a uniform time trend.
+
+### Economic Context Moderation: Individual Income
+
+```{r income 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+INCOME_BASE <- "income"   # <-- THIS is the correct BES income measure
+
+# ---------- helpers ----------
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+# ---------- build long panel with income ----------
+make_long_with_income <- function(df,
+                                  dv_base,
+                                  brit_base,
+                                  time_base,
+                                  income_base,
+                                  age_base = NULL){
+
+  w_dv     <- waves_available(df, dv_base)
+  w_brit   <- waves_available(df, brit_base)
+  w_time   <- waves_available(df, time_base)
+  w_income <- waves_available(df, income_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_income))
+
+  if(!is.null(age_base)){
+    w_age <- waves_available(df, age_base)
+    waves <- intersect(waves, w_age)
+  }
+
+  if(length(waves) < 3){
+    stop("Too few overlapping waves across DV, britishness, time, income (and age).")
+  }
+
+  dv_cols     <- paste0(dv_base,     "W", waves)
+  brit_cols   <- paste0(brit_base,   "W", waves)
+  time_cols   <- paste0(time_base,   "W", waves)
+  income_cols <- paste0(income_base, "W", waves)
+  age_cols    <- if(!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),     ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(brit_cols),   ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(income_cols), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),    ~ as.numeric(haven::zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id,
+           all_of(dv_cols),
+           all_of(brit_cols),
+           all_of(time_cols),
+           all_of(income_cols),
+           all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv     = all_of(dv_base),
+      brit   = all_of(brit_base),
+      income = all_of(income_base),
+      age    = if(!is.null(age_base)) all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+
+# ---------- Panel A: without age ----------
+panel_income_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = NULL
+)
+
+# ---------- Panel B: with age ----------
+panel_income_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = AGE_BASE
+)
+
+# ---------- Models ----------
+# (1) Income  WITHOUT age
+m_inc_1 <- feols(
+  dv ~ brit + income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (2) Income  WITH age
+m_inc_2 <- feols(
+  dv ~ brit + income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# (3) Income moderation WITHOUT age
+m_inc_3 <- feols(
+  dv ~ brit * income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (4) Income moderation WITH age
+m_inc_4 <- feols(
+  dv ~ brit * income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+```
+
+```{r income 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_inc_1)
+summary(m_inc_2)
+summary(m_inc_3)
+summary(m_inc_4)
+```
+
+Respondent fixed-effects models indicate that British national identity retains a statistically significant within-individual association with immigration self-placement in samples restricted to respondents with observed household income. In contrast, household income itself does not exert an independent within-person effect, nor does its inclusion attenuate the estimated effect of Britishness. Introducing an interaction between income and Britishness does not improve model fit and yields no evidence that income conditions the influence of national identity on immigration attitudes. Together, these results suggest that the political relevance of Britishness is not driven by individual self-assigned income levels per se, motivating a shift from resource-based measures toward indicators of economic insecurity and exposure to risk in subsequent analyses. To address differences in household composition and comparability of income across respondents, I re-estimate the micro-level income models using an equivalised measure of gross household income constructed following the OECD-modified equivalence scale and ONS guidelines (for a description of the creation of such variables, see Annex XXX).
+
+```{r income_equivalised, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+# ============================================================
+#Equivalised household income (ONS OECD-modified scale)
+# ============================================================
+# This chunk:
+# 1) Loads the derived equivalised income file (id-wave)
+# 2) Joins it to a long panel (built with the same DV/brit/time structure)
+# 3) Estimates the same FE specifications using equivalised income
+#
+
+# --- Load equivalised income (constructed externally; keyed by id + wave) ---
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds")
+
+eq_long <- eq_long %>%
+  mutate(
+    id   = as.character(id),
+    wave = as.integer(wave)
+  )
+
+
+# --- Build long panels using the same infrastructure as the income models ---
+# use make_long_with_income() but feed any income_base that exists across waves.
+# Here, the *original* income base only to create the canonical long structure,
+# then merge equivalised income by (id, wave).
+panel_eq_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,   # uses your existing income base to ensure overlap
+  age_base = NULL
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base = AGE_BASE
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+# --- Sanity check: merge worked and missingness is as expected ---
+panel_eq_age %>%
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    share_eq03_missing = mean(is.na(income_eq_child03)),
+    share_eq05_missing = mean(is.na(income_eq_child05))
+  )
+
+# ============================================================
+# Models with equivalised income
+# ============================================================
+
+# --- Prepare analysis samples (explicit, avoids silent failures) ---
+panel_eq03_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child03))
+
+panel_eq05_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child05))
+
+# --- Sanity checks: fail fast with a clear message if merge/coverage is an issue ---
+if(nrow(panel_eq03_noage) == 0 || nrow(panel_eq03_age) == 0){
+  stop("No non-missing income_eq_child03 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+if(nrow(panel_eq05_noage) == 0 || nrow(panel_eq05_age) == 0){
+  stop("No non-missing income_eq_child05 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+# --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_1 <- feols(
+  dv ~ brit + income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_2 <- feols(
+  dv ~ brit + income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_3 <- feols(
+  dv ~ brit * income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_4 <- feols(
+  dv ~ brit * income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+# --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_1 <- feols(
+  dv ~ brit + income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_2 <- feols(
+  dv ~ brit + income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_3 <- feols(
+  dv ~ brit * income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_4 <- feols(
+  dv ~ brit * income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+```
+
+```{r income_equivalised_results 1, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound A: child weight = 0.3 (lower bound)
+summary(m_eq03_1)
+summary(m_eq03_2)
+summary(m_eq03_3)
+summary(m_eq03_4)
+
+```
+
+Using the conservative lower-bound assumption that all dependent children receive a weight of 0.3, respondent fixed-effects models with wave fixed effects yield results that closely mirror those obtained with raw household income. Across all specifications, British national identity retains a statistically precise within-individual association with immigration self-placement, while equivalised household income itself exhibits no independent within-person effect. Including age controls does not alter these estimates, and introducing an interaction between Britishness and equivalised income provides no evidence that income conditions the attitudinal relevance of national identity. Model fit values remain virtually unchanged relative to the baseline income specifications. Taken together, these findings indicate that the null effect of income is not an artefact of household size or composition and reinforce the conclusion that individual material resources, whether measured in raw or equivalised terms, do not meaningfully activate national identity in shaping immigration attitudes.
+
+```{r income_equivalised_results 2, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound B: child weight = 0.5 (upper bound)
+summary(m_eq05_1)
+summary(m_eq05_2)
+summary(m_eq05_3)
+summary(m_eq05_4)
+
+```
+
+As a further robustness check, I re-estimate the micro-level income models using an alternative equivalised income measure that assigns a higher weight to dependent children (0.5), corresponding to the upper bound of the OECD-modified equivalence scale. Results from respondent fixed-effects models with wave fixed effects are substantively indistinguishable from those obtained under the lower-bound specification. British national identity continues to exhibit a statistically precise within-individual association with immigration self-placement, while equivalised household income shows no independent effect and does not attenuate the estimated impact of Britishness. Adding age controls leaves the results unchanged, and interaction models provide no evidence that equivalised income conditions the relationship between national identity and immigration attitudes. Model fit remain virtually identical across specifications. Taken together, these findings demonstrate that the null effect of income is robust to alternative assumptions regarding the relative consumption needs of children and confirm that individual economic resources—whether measured using conservative or generous equivalence scales—do not meaningfully activate national identity in shaping immigration preferences.
+
+### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r risk 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+RISK_BASE <- "riskUnemployment"
+
+# ---------- build long panels ----------
+panel_risk_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,   # reuse function; rename later
+  age_base = NULL
+)
+
+panel_risk_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,
+  age_base = AGE_BASE
+)
+
+# Rename for clarity
+panel_risk_noage <- panel_risk_noage |>
+  dplyr::rename(risk_unemp = income)
+
+panel_risk_age <- panel_risk_age |>
+  dplyr::rename(risk_unemp = income)
+
+# ---------- Models ----------
+# (1) Main effects, no age
+m_risk_1 <- feols(
+  dv ~ brit + risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (2) Main effects, with age
+m_risk_2 <- feols(
+  dv ~ brit + risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# (3) Moderation, no age
+m_risk_3 <- feols(
+  dv ~ brit * risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (4) Moderation, with age
+m_risk_4 <- feols(
+  dv ~ brit * risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+```
+
+summary(m_risk_1) summary(m_risk_2) summary(m_risk_3) summary(m_risk_4)
+
+```{r risk 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_risk_1)
+summary(m_risk_2)
+summary(m_risk_3)
+summary(m_risk_4)
+
+```
+
+Respondent fixed-effects models show no robust evidence that perceived unemployment risk conditions the relationship between British national identity and immigration self-placement. While the interaction between Britishness and perceived unemployment risk is small and statistically insignificant across specifications, the main effect of unemployment risk becomes weakly positive at the 10% level once the interaction term is included. This marginal association is conditional on the interaction specification, not present in non-interacted models, and substantively negligible in size. Importantly, the baseline association between Britishness and immigration self-placement remains stable and precisely estimated throughout. Taken together, these results suggest that individual-level economic insecurity does not meaningfully activate national identity in shaping immigration attitudes, motivating a shift toward contextual economic conditions in subsequent analyses.
+
+*Note for myself: Why risk unemployment became positive after adding the interaction term? Because once an interaction is introduced, the main effect of unemployment risk is redefined as the effect at Britishness equal to zero; this changes the estimand and reallocates shared variance, which can produce small, conditional effects without altering the substantive conclusion. Once we include an interaction, the model no longer estimates an average effect of unemployment risk. Instead, it estimates the effect at a specific level of national identity, by default, when Britishness equals zero (take the derivative in relation to unemplrisk). Since that value is not substantively meaningful, we focus on the interaction and predicted effects rather than the main coefficient.*
+
+## Robustness Checks
+
+### Brittishness as Categorical
+
+```{r 0.1, include=FALSE, echo=FALSE}
+
+panel_self <- panel_self |>
+  mutate(
+    brit_cat = factor(brit, levels = 1:7),
+    brit_cat = relevel(brit_cat, ref = "7")
+  )
+
+panel_income_noage <- panel_income_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_income_age <- panel_income_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_noage <- panel_risk_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_age <- panel_risk_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_noage <- panel_eq_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_age <- panel_eq_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+```
+
+#### Base Models
+
+```{r brit cat 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Model 1 (categorical Britishness; 7 = base)
+m1_cat <- feols(
+  dv ~ i(brit, ref = 7) | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+# Model 2 (+ age)
+m2_cat <- feols(
+  dv ~ i(brit, ref = 7) + age | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+m_wave_cat <- feols(
+  dv ~ i(wave, brit, ref = 7) | id,
+  data = panel_self,
+  cluster = "id"
+)
+
+
+m1_cat
+m2_cat
+m_wave_cat
+
+iplot(
+  m_wave_cat,
+  xlab = "Wave",
+  main = "Wave-specific difference relative to Britishness = 7"
+)
+
+```
+
+Re-estimating the baseline micro models using Britishness as a categorical variable yields a clear and highly structured pattern. Relative to periods in which respondents place themselves at the highest level of British national identification (category 7), all lower Britishness categories are associated with significantly more permissive immigration self-placement. The magnitude of these differences increases monotonically as national identification weakens: respondents identifying at the lowest levels of Britishness exhibit the largest positive deviations, while those just below the maximum (category 6) show smaller but still statistically precise differences. These estimates are obtained from respondent fixed-effects models with wave fixed effects, indicating that they reflect within-individual shifts in immigration attitudes as respondents move across identity categories over time rather than cross-sectional differences between individuals. Adding age controls leaves the pattern entirely unchanged, reinforcing the conclusion that variation in national identification itself, rather than compositional or lifecycle factors, drives the observed differences.
+
+Allowing the categorical Britishness effects to vary flexibly across waves reveals pronounced temporal heterogeneity consistent with the political context of the period. As shown in Figure X, the attitudinal gap between respondents with weaker British identification and those who identify most strongly as British is negative or muted in the early post-referendum waves, but becomes substantially larger and positive from the mid-Brexit period onward, peaking in waves coinciding with heightened political salience of national identity. This non-monotonic pattern underscores that the attitudinal relevance of national identity is episodic and context-dependent rather than stable over time, even when identity is modelled non-parametrically.
+
+Importantly, the categorical specification closely mirrors the substantive conclusions obtained when Britishness is modelled as a continuous variable. In both cases, stronger British identification is associated with more restrictive immigration self-placement, and the effect varies sharply across political contexts rather than following a smooth time trend. Treating Britishness categorically demonstrates that this relationship is not driven by a linear functional-form assumption: instead, it reflects discrete, ordered differences between identity positions, with the strongest attitudinal contrasts emerging between respondents who identify very strongly as British and those who move away from that position. The persistence of the results across continuous and categorical specifications provides strong evidence that the observed association is not an artifact of scale choice or modelling assumptions but reflects a robust within-individual relationship between national identity and immigration attitudes.
+
+#### Economic Context Moderation: Individual Income
+
+```{r brit cat 2, echo=FALSE, warning=FALSE, message=FALSE}
+# Income main effects (categorical Britishness)
+m_inc_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+m_inc_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# Income moderation (categorical Britishness × income)
+m_inc_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+m_inc_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+# --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+summary(m_inc_cat_1)
+summary(m_inc_cat_2)
+summary(m_inc_cat_3)
+summary(m_inc_cat_4)
+summary(m_eq03_cat_1) 
+summary(m_eq03_cat_2) 
+summary(m_eq03_cat_3) 
+summary(m_eq03_cat_4)
+summary(m_eq05_cat_1) 
+summary(m_eq05_cat_2) 
+summary(m_eq05_cat_3) 
+summary(m_eq05_cat_4)
+
+
+```
+
+Using Britishness as a categorical measure with the “most British” category (7) as the reference yields results that are fully consistent with the baseline income models. In respondent fixed-effects models with wave fixed effects, all lower Britishness categories (1–6) are associated with significantly more permissive immigration self-placement relative to category 7, with the largest differences concentrated among respondents who place themselves farthest from the “very strongly British” end of the scale. In contrast, individual household income exhibits no independent within-person association with immigration attitudes: the income coefficient is small and statistically insignificant both at the baseline specification and the age-adjusted specification. Introducing interactions between income and the Britishness categories also provides little evidence of meaningful moderation. While the interaction terms for categories 5 and 6 approach some level of significance, these effects are weak, not consistently significant across the full set of categories, and do not materially improve fit. The results, therefore, continue to indicate that the relationship between national identification and immigration attitudes is largely invariant to changes in respondents’ economic resources as captured by self-reported income bands.
+
+These patterns closely mirror the conclusions from the continuous Britishness specification in the original micro section. In both approaches, the core within-individual association between national identity and immigration self-placement remains robust, and neither raw household income nor its interaction with national identity provides evidence that income conditions the effect of Britishness. The categorical re-estimation strengthens this conclusion by removing any linearity assumption about identity: the absence of an income effect persists even when Britishness is modelled non-parametrically as a set of ordered identity positions relative to the “most British” baseline. The same logic carries over to the reviewer-requested equivalised income specifications. When income is adjusted for household composition (both lower- and upper-bound equivalence-scale assumptions), equivalised income remains statistically null, and interactions between equivalised income and categorical Britishness are uniformly small and statistically insignificant. Taken together, the income results, across raw and equivalised measures and across continuous and categorical identity specifications, support the interpretation already advanced in the micro analysis: individual material resources do not appear to be the channel through which national identity becomes politically consequential for immigration attitudes, motivating greater emphasis on contextual economic conditions at the meso and macro levels.
+
+#### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r brit cat 3, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Risk main effects (categorical Britishness)
+m_risk_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+m_risk_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# Risk moderation (categorical Britishness × risk)
+m_risk_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+m_risk_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+summary(m_risk_cat_1)
+summary(m_risk_cat_2)
+summary(m_risk_cat_3)
+summary(m_risk_cat_4)
+```
+
+Re-estimating the unemployment risk models using Britishness as a categorical variable with the “very strongly British” category as the reference yields results that closely parallel the baseline categorical identity patterns. Across all specifications, respondents who place themselves at lower levels of British national identification exhibit significantly more permissive immigration self-placement relative to those in the highest Britishness category, with the magnitude of the differences increasing monotonically as identification weakens. In contrast, perceived unemployment risk does not display a statistically meaningful within-individual association with immigration attitudes in either the baseline or age-adjusted models. The coefficient on unemployment risk is small, precisely estimated around zero, and substantively negligible. This indicates that short-run changes in perceived exposure to unemployment do not independently shift immigration attitudes once respondent and wave fixed effects are accounted for.
+
+Introducing interactions between unemployment risk and the categorical Britishness indicators provides only limited and weak evidence of moderation. While the interaction for Britishness category 2 reaches conventional significance levels and category 4 approaches marginal significance, these effects are isolated, small in magnitude, and not systematically ordered across identity categories. Moreover, the baseline Britishness coefficients remain large, stable, and highly statistically significant in all interacted specifications. Taken together, these results indicate that perceived unemployment risk does not meaningfully activate or dampen the attitudinal relevance of national identity at the individual level; any apparent interaction effects are fragile and do not alter the substantive interpretation.
+
+These findings are fully consistent with the results obtained when Britishness is modelled as a continuous variable in the original micro analysis. In both the continuous and categorical specifications, perceived unemployment risk fails to exert a robust within-person effect on immigration attitudes and does not systematically condition the influence of national identity. Modelling Britishness categorically strengthens this conclusion by demonstrating that the absence of an unemployment-risk effect is not driven by linearity assumptions about identity strength. Instead, the results show that even discrete shifts across identity categories do not translate into differential responsiveness to perceived unemployment risk. Together, the evidence reinforces the conclusion advanced in the BES_Micro section: individual-level economic insecurity, whether measured as income or perceived unemployment risk, does not meaningfully mediate the relationship between national identity and immigration attitudes, motivating the subsequent focus on meso- and macro-level economic contexts.
+
+### Other measures of nationalism
+
+As a further robustness check, now the britishness identity measure is replaced by the englishness one. Replicating the baseline specifications, we estimate respondent fixed-effects models with wave fixed effects, examine flexible wave-specific identity effects, and test whether individual economic resources and perceived unemployment risk condition the relationship between national identity and immigration self-placement. This approach allows us to assess whether the core findings hinge on the specific operationalization of national identity or instead reflect a more general identity-based mechanism.
+
+Substantively, the use of Englishness provides a theoretically meaningful contrast to Britishness. Whereas Britishness captures attachment to the British state and its civic–political boundaries, Englishness reflects a sub-national identity that is more closely associated with ethnic, cultural, and regional conceptions of belonging. Comparative work in nationalism and identity politics emphasizes that state-level and sub-state identities may differ markedly in their political salience and in the conditions under which they become attitudinally consequential. By substituting Englishness for Britishness while holding the empirical strategy constant, we directly test whether the observed micro-level relationships are driven by generic national identification or are specific to state-centered identity in the British context. This distinction is central to our theoretical argument and speaks directly to broader comparative debates on the political activation of national versus sub-national identities.
+
+To further contextualize the contrast between Britishness and Englishness observed in the micro-level models, we examine their descriptive evolution across BES waves. Figure X plots the wave-level mean of each identity on the original 1–7 scale, while Figure Y presents demeaned trends that highlight within-identity deviations from each identity’s overall mean. These descriptive patterns are not intended to provide causal estimates, but rather to illustrate the extent to which each identity exhibits temporal dynamism over the period covered by the BES panel.
+
+```{r eng_brit_plot, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(haven)
+library(stringr)
+
+ids_wave <- df %>%
+  select(
+    id,
+    matches("^britishnessW\\d+$"),
+    matches("^englishnessW\\d+$")
+  ) %>%
+  mutate(across(-id, ~ as.numeric(zap_labels(.)))) %>%
+  pivot_longer(
+    cols = -id,
+    names_to = c("identity", "wave"),
+    names_pattern = "(britishness|englishness)W(\\d+)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    identity = recode(identity,
+                      britishness = "Britishness",
+                      englishness = "Englishness"),
+    value = if_else(value %in% 1:7, value, NA_real_)
+  ) %>%
+  group_by(identity, wave) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
+
+ggplot(ids_wave, aes(wave, mean_value, color = identity)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Mean identity strength (1–7)",
+    color = "Identity",
+    title = "Evolution of Britishness and Englishness across BES waves"
+  )
+
+ids_wave_dm <- ids_wave %>%
+  group_by(identity) %>%
+  mutate(mean_dm = mean_value - mean(mean_value, na.rm = TRUE))
+
+ggplot(ids_wave_dm, aes(wave, mean_dm, color = identity)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Deviation from identity mean",
+    color = "Identity",
+    title = "Within-wave change: Britishness vs Englishness"
+  )
+
+
+```
+
+Two descriptive patterns emerge from Figures X and Y. First, Britishness is consistently higher on average than Englishness across all BES waves, despite both measures being coded on the same 1–7 scale. This gap reflects the broader and more encompassing character of British national identification, which remains the dominant identity label for most respondents throughout the period. At the same time, both identities display meaningful temporal variation rather than static trajectories. Mean levels of Britishness and Englishness rise and fall across survey waves in a non-monotonic manner, with several coincident shifts occurring around politically salient moments.
+
+The demeaned trends in Figure Y further clarify these dynamics. Once each identity is centered on its own mean, both Britishness and Englishness exhibit substantial within-wave deviations, indicating that respondents revise their reported levels of national identification over time rather than holding fixed attachments. Notably, Englishness does not appear uniformly flatter or more inert than Britishness. Instead, its within-wave changes are of comparable magnitude in several periods, suggesting that English identity is responsive to changing contexts rather than purely latent or background in nature.
+
+Importantly, these descriptive patterns are consistent with the micro-level regression results. The presence of non-trivial within-individual variation in Englishness aligns with its strong and robust association with immigration attitudes in the fixed-effects models. Conversely, while Britishness remains higher on average and exhibits clear temporal movement, its attitudinal relevance proves more sensitive to model specification and economic controls. Taken together, the figures underscore that differences between Britishness and Englishness lie not in the presence or absence of temporal dynamics, but in how shifts in these identities translate into political attitudes. Englishness, in particular, emerges as an identity dimension whose fluctuations are more tightly linked to changes in immigration self-placement, a pattern that becomes evident once both identities are measured and analysed on comparable footing.
+
+::: callout-note
+Britishness and Englishness are not measured in every BES wave. The figure plots wave-specific means for each identity in the waves in which it is observed, aligned to the common BES wave index for descriptive comparison.
+:::
+
+```{r englishness_base_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# -------------------------------------------------------------------
+# Englishness (continuous) — Base micro models
+# -------------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+panel_self_eng <- make_long_with_age(
+  df,
+  dv_base   = DV_BASE,
+  brit_base = ENG_BASE,   
+  time_base = TIME_BASE,
+  age_base  = AGE_BASE
+) %>%
+  rename(engl = brit) %>%
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+# Model 1: Englishness only
+m1_eng <- feols(
+  dv ~ engl | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Model 2: + age
+m2_eng <- feols(
+  dv ~ engl + age | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Flexible wave-specific effect (ref = W7)
+m_wave_eng <- feols(
+  dv ~ i(wave, engl, ref = 7) | id,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+```
+
+```{r englishness_base_models_results, message=FALSE, warning=FALSE}
+
+m1_eng
+m2_eng
+summary(m_wave_eng)
+```
+
+The baseline fixed-effects models indicate a strong and statistically significant negative association between Englishness and anti-immigration attitudes. In the specification including individual and wave fixed effects, a one-unit increase in Englishness is associated with a decrease of approximately 0.058 points in the dependent variable. This effect remains virtually unchanged when age is added as a time-varying control, while age itself does not reach conventional levels of statistical significance.
+
+Whereas Britishness and Englishness both exhibit a robust and statistically significant association with attitudes toward immigration, the magnitude and temporal dynamics of these effects differ in substantively meaningful ways. Across otherwise identical fixed-effects specifications, Englishness displays a consistently larger negative association with pro-immigration attitudes than Britishness, indicating that shifts in English national identification are more strongly translated into attitudinal change. Moreover, wave-specific estimates reveal that Englishness is particularly responsive to periods of heightened political salience, suggesting that it functions as a more politicized and context-sensitive form of national identification. By contrast, Britishness exhibits a comparatively more stable average association over time, consistent with its role as a broader and more institutionalized national identity. Taken together, these results imply that while both identities matter, Englishness operates as a sharper attitudinal cue in moments of political contestation, whereas Britishness reflects a more diffuse and enduring attachment.
+
+```{r englishness_income_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ------------------------------------------------------------
+# Englishness × Equivalised income (OECD: child weight = 0.3 and 0.5)
+# Correctly cleans Englishness (drops 9999 etc.)
+# ------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+# Build Englishness long panels, rename identity, CLEAN invalid codes, join eq income
+panel_eng_eq_noage <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = NULL
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = AGE_BASE
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+# Fail fast: must be 1–7 only (or NA)
+stopifnot(all(is.na(panel_eng_eq_noage$engl) | panel_eng_eq_noage$engl %in% 1:7))
+stopifnot(all(is.na(panel_eng_eq_age$engl)   | panel_eng_eq_age$engl   %in% 1:7))
+
+# Create analysis samples for both equivalence-weight variants
+panel_eng_eq03_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+
+panel_eng_eq05_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+
+if(nrow(panel_eng_eq03_noage) == 0 || nrow(panel_eng_eq03_age) == 0){
+  stop("No non-missing Englishness + income_eq_child03 observations after merge/cleaning.")
+}
+if(nrow(panel_eng_eq05_noage) == 0 || nrow(panel_eng_eq05_age) == 0){
+  stop("No non-missing Englishness + income_eq_child05 observations after merge/cleaning.")
+}
+
+# -----------------------------
+# Models: child weight = 0.3
+# -----------------------------
+m_eng_eq03_1 <- feols(
+  dv ~ engl + income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_2 <- feols(
+  dv ~ engl + income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+m_eng_eq03_3 <- feols(
+  dv ~ engl * income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_4 <- feols(
+  dv ~ engl * income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# -----------------------------
+# Models: child weight = 0.5
+# -----------------------------
+m_eng_eq05_1 <- feols(
+  dv ~ engl + income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_2 <- feols(
+  dv ~ engl + income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+m_eng_eq05_3 <- feols(
+  dv ~ engl * income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_4 <- feols(
+  dv ~ engl * income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# Output
+summary(m_eng_eq03_1); summary(m_eng_eq03_2); summary(m_eng_eq03_3); summary(m_eng_eq03_4)
+summary(m_eng_eq05_1); summary(m_eng_eq05_2); summary(m_eng_eq05_3); summary(m_eng_eq05_4)
+
+
+```
+
+Across all specifications using equivalised household income, Englishness retains a statistically significant and substantively meaningful association with attitudes toward immigration, while income itself does not. In both the lower-bound (child weight = 0.3) and upper-bound (child weight = 0.5) OECD equivalence scales, Englishness is consistently negative and statistically significant at conventional levels in models with and without age controls. The estimated magnitude of the Englishness coefficient remains stable across specifications, indicating that within-individual increases in English national identification are associated with less favourable immigration attitudes. By contrast, equivalised income exhibits no statistically significant direct effect, and the interaction terms between Englishness and income are consistently small and insignificant. These results suggest that the attitudinal association of Englishness operates independently of household income levels and is not meaningfully moderated by economic position as captured by equivalised income.
+
+Comparing the Englishness and Britishness specifications reveals a clear pattern. In both sets of models, equivalised household income does not display a statistically significant association with immigration attitudes, nor does it condition the relationship between national identification and attitudes toward immigration. The key difference lies in the identity coefficients themselves. In the Englishness models, national identification remains consistently negative and statistically significant once income is introduced, with a stable magnitude across specifications. By contrast, in the Britishness models estimated on the same samples and with identical controls, the coefficient on Britishness is small, statistically insignificant, and imprecisely estimated. This contrast indicates that conditioning on income does not attenuate the attitudinal relevance of Englishness, but it does render the Britishness association indistinguishable from zero. Together, these results suggest that Englishness captures a dimension of national identity that is more directly and robustly linked to immigration attitudes than Britishness, even when individual economic resources are explicitly accounted for.
+
+Taken together, the income robustness results highlight an important distinction between the two forms of national identification. While equivalised household income does not meaningfully shape immigration attitudes in either set of models, its inclusion clarifies differences in the attitudinal relevance of identity. Englishness remains a stable and statistically significant predictor once income is accounted for, whereas the association between Britishness and immigration attitudes is attenuated and becomes indistinguishable from zero. This pattern suggests that Englishness is less tightly bound to individuals’ material economic position and instead reflects a more politicised identity dimension, while Britishness appears more sensitive to the inclusion of economic controls. As a result, the Englishness–immigration relationship emerges as more robust to alternative economic specifications than its Britishness counterpart.
+
+```{r englishness_risk_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ============================================================
+# Perceived unemployment risk — Englishness robustness
+# (CLEAN version: Englishness + risk properly recoded)
+# ============================================================
+
+ENG_BASE  <- "englishness"
+RISK_BASE <- "riskUnemployment"
+
+# --- Build long panels (no age / with age) ---
+panel_risk_noage_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = NULL
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+panel_risk_age_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = AGE_BASE
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+# --- Fail fast sanity checks ---
+stopifnot(all(is.na(panel_risk_noage_eng$engl) | panel_risk_noage_eng$engl %in% 1:7))
+stopifnot(all(is.na(panel_risk_age_eng$engl)   | panel_risk_age_eng$engl   %in% 1:7))
+
+# --- Models: main effects ---
+m_risk_eng_1 <- feols(
+  dv ~ engl + risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_2 <- feols(
+  dv ~ engl + risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Models: moderation (interaction) ---
+m_risk_eng_3 <- feols(
+  dv ~ engl * risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_4 <- feols(
+  dv ~ engl * risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Output ---
+summary(m_risk_eng_1)
+summary(m_risk_eng_2)
+summary(m_risk_eng_3)
+summary(m_risk_eng_4)
+
+```
+
+The Englishness-based models indicate a strong and robust association between national identification and immigration attitudes, alongside a modest but statistically significant role for perceived unemployment risk. Across specifications with individual and wave fixed effects, Englishness is consistently negative and highly statistically significant, with coefficients that remain stable when age is included as a control. In contrast to the income models, perceived unemployment risk enters positively and significantly in the main-effects specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes. However, when allowing for an interaction between Englishness and perceived unemployment risk, neither the interaction term nor the main effect of risk reaches statistical significance. This suggests that while perceived economic insecurity is directly related to immigration attitudes among respondents identifying as English, it does not systematically condition the effect of Englishness itself.
+
+The contrast between the Englishness and Britishness specifications highlights an important asymmetry in how perceived economic insecurity relates to immigration attitudes. In the Britishness models, perceived unemployment risk does not exert a statistically significant main effect, nor does it condition the association between Britishness and immigration attitudes. By contrast, in the Englishness models, perceived unemployment risk enters as a positive and statistically significant main effect in the baseline specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes among respondents for whom Englishness is salient. At the same time, the interaction between Englishness and risk remains statistically insignificant, suggesting that economic insecurity does not systematically amplify or dampen the effect of Englishness itself. This pattern differs from the income robustness results, where economic resources were unrelated to immigration attitudes under both identity measures. Taken together, the findings suggest that subjective perceptions of economic vulnerability, rather than objective income position, are selectively linked to immigration attitudes in the context of English national identification, while remaining largely irrelevant when Britishness is the operative identity.
