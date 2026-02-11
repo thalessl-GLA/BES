@@ -234,6 +234,21 @@ models_cpih <- list(
 
   int_age     = feols(dv ~ brit * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
 )
+
+# ======================================
+# 6) Econ rob checks
+# ======================================
+
+brit_econ_rob_checks <- list(
+  brit_gdp = feols(brit ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_unempl_rate = feols(brit ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_claimant_k = feols(brit ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_cpih_rate = feols(brit ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id))
+  
 ```
 
 ```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
@@ -300,8 +315,13 @@ list(
   cpih_main_age      = models_cpih$main_age,
   cpih_int_noage     = models_cpih$int,
   cpih_int_age       = models_cpih$int_age
-) |>
+  ) |>
   lapply(fixest::coeftable)
+
+brit_econ_rob_checks$brit_gdp
+brit_econ_rob_checks$brit_unempl_rate
+brit_econ_rob_checks$brit_claimant_k
+brit_econ_rob_checks$brit_cpih_rate
 ```
 
 ## Macro-level analysis {.tabset}
@@ -429,18 +449,18 @@ Taken together, these results reinforce the macro-level main specifications. Nat
 ```{r rob check englishness, include=FALSE, echo=FALSE}
 
 DV_BASE    <- "immigSelf"
-ENG_BASE   <- "englishness"   # << switched
+ENG_BASE   <- "englishness"
 TIME_BASE  <- "starttime"
 AGE_BASE   <- "age"
 
-# Macro families (in your macro-augmented dataset)
+# Macro families
 MACRO_GDP_BASE    <- "gdp_pc"
 MACRO_UNEMP_BASE  <- "unempl_rate"
 MACRO_CLAIM_BASE  <- "claimant_k"
 MACRO_CPIH_BASE   <- "cpih_rate"
 
 # -------------------------
-# Helpers (same spirit as meso)
+# Helpers
 # -------------------------
 get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
 
@@ -457,46 +477,46 @@ zap_if_labelled <- function(x){
 # ======================================================
 # 1) Choose waves where DV + englishness + time exist
 # ======================================================
-w_dv   <- waves_available(df, DV_BASE)
-w_eng  <- waves_available(df, ENG_BASE)
-w_time <- waves_available(df, TIME_BASE)
+w_dv_eng   <- waves_available(df, DV_BASE)
+w_eng      <- waves_available(df, ENG_BASE)
+w_time_eng <- waves_available(df, TIME_BASE)
 
-waves_core <- Reduce(intersect, list(w_dv, w_eng, w_time))
-if(length(waves_core) < 3) stop("Too few overlapping waves across DV, englishness, and starttime.")
+waves_core_eng <- Reduce(intersect, list(w_dv_eng, w_eng, w_time_eng))
+if(length(waves_core_eng) < 3) stop("Too few overlapping waves across DV, englishness, and starttime.")
 
 # Age overlap (optional)
-w_age <- waves_available(df, AGE_BASE)
-waves_age <- intersect(waves_core, w_age)
+w_age_eng <- waves_available(df, AGE_BASE)
+waves_age_eng <- intersect(waves_core_eng, w_age_eng)
 
-# Macro overlap (ensures each macro series exists for the waves we will use)
-w_gdp   <- waves_available(df, MACRO_GDP_BASE)
-w_unemp <- waves_available(df, MACRO_UNEMP_BASE)
-w_claim <- waves_available(df, MACRO_CLAIM_BASE)
-w_cpih  <- waves_available(df, MACRO_CPIH_BASE)
+# Macro overlap
+w_gdp_eng   <- waves_available(df, MACRO_GDP_BASE)
+w_unemp_eng <- waves_available(df, MACRO_UNEMP_BASE)
+w_claim_eng <- waves_available(df, MACRO_CLAIM_BASE)
+w_cpih_eng  <- waves_available(df, MACRO_CPIH_BASE)
 
-waves_macro <- Reduce(intersect, list(waves_core, w_gdp, w_unemp, w_claim, w_cpih))
-if(length(waves_macro) < 3) stop("Too few overlapping waves across DV/engl/time and macro series.")
+waves_macro_eng <- Reduce(intersect, list(waves_core_eng, w_gdp_eng, w_unemp_eng, w_claim_eng, w_cpih_eng))
+if(length(waves_macro_eng) < 3) stop("Too few overlapping waves across DV/englishness/time and macro series.")
 
 # =========================================
 # 2) Build wide core dataset (dv/engl/time/age)
 # =========================================
-core_cols <- c(
-  paste0(DV_BASE,  "W", waves_macro),
-  paste0(ENG_BASE, "W", waves_macro),
-  paste0(TIME_BASE,"W", waves_macro),
-  paste0(AGE_BASE, "W", intersect(waves_macro, w_age))
+core_cols_eng <- c(
+  paste0(DV_BASE,   "W", waves_macro_eng),
+  paste0(ENG_BASE,  "W", waves_macro_eng),
+  paste0(TIME_BASE, "W", waves_macro_eng),
+  paste0(AGE_BASE,  "W", intersect(waves_macro_eng, w_age_eng))
 )
 
-df_core <- df %>%
-  mutate(across(any_of(core_cols), zap_if_labelled)) %>%
-  select(id, any_of(core_cols))
+df_core_eng <- df %>%
+  mutate(across(any_of(core_cols_eng), zap_if_labelled)) %>%
+  select(id, any_of(core_cols_eng))
 
 # =========================================
 # 3) Reshape core to long
 # =========================================
 
-# (A) DV + Englishness (numeric)
-df_long_core <- df_core %>%
+# (A) DV + Englishness
+df_long_core_eng <- df_core_eng %>%
   pivot_longer(
     cols = matches(paste0("^(", DV_BASE, "|", ENG_BASE, ")W\\d+$")),
     names_to = c("var", "wave"),
@@ -510,8 +530,8 @@ df_long_core <- df_core %>%
     engl = !!ENG_BASE
   )
 
-# (B) starttime separately (datetime-safe; keep as character to avoid tz issues)
-df_long_time <- df_core %>%
+# (B) starttime separately
+df_long_time_eng <- df_core_eng %>%
   pivot_longer(
     cols = matches(paste0("^", TIME_BASE, "W\\d+$")),
     names_to = "wave",
@@ -524,12 +544,12 @@ df_long_time <- df_core %>%
   )
 
 # Merge core + time
-df_long <- df_long_core %>%
-  left_join(df_long_time, by = c("id", "wave"))
+df_long_eng <- df_long_core_eng %>%
+  left_join(df_long_time_eng, by = c("id", "wave"))
 
-# (C) Add age (optional, only where available)
-if(length(intersect(waves_macro, w_age)) > 0){
-  age_long <- df_core %>%
+# (C) Add age (optional)
+if(length(intersect(waves_macro_eng, w_age_eng)) > 0){
+  age_long_eng <- df_core_eng %>%
     pivot_longer(
       cols = matches(paste0("^", AGE_BASE, "W\\d+$")),
       names_to = "wave",
@@ -538,12 +558,12 @@ if(length(intersect(waves_macro, w_age)) > 0){
     ) %>%
     mutate(wave = as.integer(wave))
 
-  df_long <- df_long %>%
-    left_join(age_long, by = c("id", "wave"))
+  df_long_eng <- df_long_eng %>%
+    left_join(age_long_eng, by = c("id", "wave"))
 }
 
-# Derive year (optional diagnostics) + CLEAN ENGLISHNESS
-df_long <- df_long %>%
+# Derive year + CLEAN DV/ENGLISHNESS
+df_long_eng <- df_long_eng %>%
   mutate(
     time = suppressWarnings(lubridate::ymd_hms(time, quiet = TRUE)),
     year = lubridate::year(time),
@@ -554,14 +574,14 @@ df_long <- df_long %>%
   filter(
     !is.na(dv),
     !is.na(engl),
-    engl %in% 1:7,    # <<<<<<<<<<<<<< CLEANING STEP (drops 9999/DK etc.)
+    engl %in% 1:7,
     !is.na(wave)
   )
 
 # ==========================================================
 # 4) Attach macro variables (wide-by-wave -> long, by id×wave)
 # ==========================================================
-macro_long_from_base <- function(df, base, waves_keep){
+macro_long_from_base_eng <- function(df, base, waves_keep){
   cols <- paste0(base, "W", waves_keep)
   df %>%
     select(id, any_of(cols)) %>%
@@ -574,83 +594,116 @@ macro_long_from_base <- function(df, base, waves_keep){
     mutate(wave = as.integer(wave))
 }
 
-macro_gdp   <- macro_long_from_base(df, MACRO_GDP_BASE,   waves_macro)
-macro_unemp <- macro_long_from_base(df, MACRO_UNEMP_BASE, waves_macro)
-macro_claim <- macro_long_from_base(df, MACRO_CLAIM_BASE, waves_macro)
-macro_cpih  <- macro_long_from_base(df, MACRO_CPIH_BASE,  waves_macro)
+macro_gdp_eng   <- macro_long_from_base_eng(df, MACRO_GDP_BASE,   waves_macro_eng)
+macro_unemp_eng <- macro_long_from_base_eng(df, MACRO_UNEMP_BASE, waves_macro_eng)
+macro_claim_eng <- macro_long_from_base_eng(df, MACRO_CLAIM_BASE, waves_macro_eng)
+macro_cpih_eng  <- macro_long_from_base_eng(df, MACRO_CPIH_BASE,  waves_macro_eng)
 
-df_long <- df_long %>%
-  left_join(macro_gdp,   by = c("id", "wave")) %>%
-  left_join(macro_unemp, by = c("id", "wave")) %>%
-  left_join(macro_claim, by = c("id", "wave")) %>%
-  left_join(macro_cpih,  by = c("id", "wave"))
+df_long_eng <- df_long_eng %>%
+  left_join(macro_gdp_eng,   by = c("id", "wave")) %>%
+  left_join(macro_unemp_eng, by = c("id", "wave")) %>%
+  left_join(macro_claim_eng, by = c("id", "wave")) %>%
+  left_join(macro_cpih_eng,  by = c("id", "wave"))
+
+# Fail fast (prevents the “LHS not in data” mystery)
+stopifnot(all(c("dv","engl","wave","id") %in% names(df_long_eng)))
 
 # ======================================
-# 5) Model runner (same 4-model structure) — ENGLISHNESS
+# 5) Model runner — ENGLISHNESS
 # ======================================
 
-models_gdp <- list(
+models_gdp_eng <- list(
   main_0      = feols(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main        = feols(dv ~ engl + gdp_pc        | id + wave, data = df_long, cluster = ~id),
+  main        = feols(dv ~ engl + gdp_pc        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
   main_age_0  = feols(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main_age    = feols(dv ~ engl + gdp_pc + age  | id + wave, data = df_long, cluster = ~id),
+  main_age    = feols(dv ~ engl + gdp_pc + age  | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int         = feols(dv ~ engl * gdp_pc        | id + wave, data = df_long, cluster = ~id),
+  int         = feols(dv ~ engl * gdp_pc        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int_age     = feols(dv ~ engl * gdp_pc + age  | id + wave, data = df_long, cluster = ~id)
+  int_age     = feols(dv ~ engl * gdp_pc + age  | id + wave,
+                      data = df_long_eng, cluster = ~id)
 )
 
-models_unemp <- list(
+models_unemp_eng <- list(
   main_0      = feols(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main        = feols(dv ~ engl + unempl_rate        | id + wave, data = df_long, cluster = ~id),
+  main        = feols(dv ~ engl + unempl_rate        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
   main_age_0  = feols(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main_age    = feols(dv ~ engl + unempl_rate + age  | id + wave, data = df_long, cluster = ~id),
+  main_age    = feols(dv ~ engl + unempl_rate + age  | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int         = feols(dv ~ engl * unempl_rate        | id + wave, data = df_long, cluster = ~id),
+  int         = feols(dv ~ engl * unempl_rate        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int_age     = feols(dv ~ engl * unempl_rate + age  | id + wave, data = df_long, cluster = ~id)
+  int_age     = feols(dv ~ engl * unempl_rate + age  | id + wave,
+                      data = df_long_eng, cluster = ~id)
 )
 
-models_claim <- list(
+models_claim_eng <- list(
   main_0      = feols(dv ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main        = feols(dv ~ engl + claimant_k        | id + wave, data = df_long, cluster = ~id),
+  main        = feols(dv ~ engl + claimant_k        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
   main_age_0  = feols(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main_age    = feols(dv ~ engl + claimant_k + age  | id + wave, data = df_long, cluster = ~id),
+  main_age    = feols(dv ~ engl + claimant_k + age  | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int         = feols(dv ~ engl * claimant_k        | id + wave, data = df_long, cluster = ~id),
+  int         = feols(dv ~ engl * claimant_k        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int_age     = feols(dv ~ engl * claimant_k + age  | id + wave, data = df_long, cluster = ~id)
+  int_age     = feols(dv ~ engl * claimant_k + age  | id + wave,
+                      data = df_long_eng, cluster = ~id)
 )
 
-models_cpih <- list(
+models_cpih_eng <- list(
   main_0      = feols(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main        = feols(dv ~ engl + cpih_rate        | id + wave, data = df_long, cluster = ~id),
+  main        = feols(dv ~ engl + cpih_rate        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
   main_age_0  = feols(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
-                      data = df_long, cluster = ~id),
+                      data = df_long_eng, cluster = ~id),
 
-  main_age    = feols(dv ~ engl + cpih_rate + age  | id + wave, data = df_long, cluster = ~id),
+  main_age    = feols(dv ~ engl + cpih_rate + age  | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int         = feols(dv ~ engl * cpih_rate        | id + wave, data = df_long, cluster = ~id),
+  int         = feols(dv ~ engl * cpih_rate        | id + wave,
+                      data = df_long_eng, cluster = ~id),
 
-  int_age     = feols(dv ~ engl * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
+  int_age     = feols(dv ~ engl * cpih_rate + age  | id + wave,
+                      data = df_long_eng, cluster = ~id)
+)
+
+# ======================================
+# 6) Econ rob checks (identity = econ) — ENGLISHNESS
+# ======================================
+engl_econ_rob_checks <- list(
+  engl_gdp         = feols(engl ~ gdp_pc       + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_unempl_rate = feols(engl ~ unempl_rate  + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_claimant_k  = feols(engl ~ claimant_k   + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_cpih_rate   = feols(engl ~ cpih_rate    + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id)
 )
 ```
 
@@ -688,6 +741,11 @@ list(
   cpih_int_age_engl    = models_cpih$int_age
 ) |>
   lapply(fixest::coeftable)
+
+engl_econ_rob_checks$engl_gdp
+engl_econ_rob_checks$engl_unempl_rate
+engl_econ_rob_checks$engl_claimant_k
+engl_econ_rob_checks$engl_cpih_rate
 
 ```
 
