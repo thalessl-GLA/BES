@@ -575,7 +575,34 @@ summary(m_risk_4)
 
 ```
 
-Respondent fixed-effects models show no robust evidence that perceived unemployment risk conditions the relationship between British national identity and immigration self-placement. While the interaction between Britishness and perceived unemployment risk is small and statistically insignificant across specifications, the main effect of unemployment risk becomes weakly positive at the 10% level once the interaction term is included. This marginal association is conditional on the interaction specification, not present in non-interacted models, and substantively negligible in size. Importantly, the baseline association between Britishness and immigration self-placement remains stable and precisely estimated throughout. Taken together, these results suggest that individual-level economic insecurity does not meaningfully activate national identity in shaping immigration attitudes, motivating a shift toward contextual economic conditions in subsequent analyses.
+Respondent fixed-effects models show no robust evidence that perceived unemployment risk conditions the relationship between British national identity and immigration self-placement. While the interaction between Britishness and perceived unemployment risk is small and statistically insignificant across specifications, the main effect of unemployment risk becomes weakly positive at the 10% level once the interaction term is included. This marginal association is conditional on the interaction specification, not present in non-interacted models, and substantively negligible in size. Importantly, the baseline association between Britishness and immigration self-placement remains stable and precisely estimated throughout. Taken together, these results suggest that individual-level economic insecurity does not meaningfully activate national identity in shaping immigration attitudes, motivating a shift toward contextual economic conditions in subsequent analyses.Once the pure economic models showed a significant statistical level, it is important to test weather risk is related to identity, to make sure there is no multicolinearity on the main specifications (interaction models). Once the pure economic models showed a significant statistical level, it is important to test weather risk is related to identity, to make sure there is no multicolinearity on the main specifications (interaction models).
+
+```{r risk 2, echo=FALSE, warning=FALSE, message=FALSE}
+
+# ==========================================================
+# Diagnostic: Does unemployment risk predict Britishness?
+# ==========================================================
+
+# (5) Britishness ~ risk (no age)
+m_brit_risk_noage <- feols(
+  brit ~ risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (6) Britishness ~ risk + age
+m_brit_risk <- feols(
+  brit ~ risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+summary(m_brit_risk_noage)
+summary(m_brit_risk)
+
+```
+
+To further clarify the relationship between perceived unemployment risk and national identity, I estimate respondent fixed-effects models with Britishness as the dependent variable. The results indicate a small but statistically significant negative association between perceived unemployment risk and British national identification. Within individuals, increases in perceived unemployment risk are associated with marginal decreases in Britishness, and this estimate remains virtually unchanged when age is included as a time-varying control. However, the substantive magnitude of this relationship is extremely small, and the within R² is effectively zero, indicating that perceived unemployment risk explains a negligible share of within-person variation in Britishness. In practical terms, while economic insecurity is weakly related to shifts in national identification, it does not meaningfully restructure identity over time. This finding helps clarify the earlier immigration models: the disappearance of the unemployment-risk effect once Britishness is introduced is not driven by strong multicollinearity or identity substitution, but rather reflects the limited independent explanatory power of subjective economic risk in shaping either identity or immigration attitudes. Britishness remains largely insulated from short-run fluctuations in perceived unemployment risk at the individual level.
 
 *Note for myself: Why risk unemployment became positive after adding the interaction term? Because once an interaction is introduced, the main effect of unemployment risk is redefined as the effect at Britishness equal to zero; this changes the estimand and reallocates shared variance, which can produce small, conditional effects without altering the substantive conclusion. Once we include an interaction, the model no longer estimates an average effect of unemployment risk. Instead, it estimates the effect at a specific level of national identity, by default, when Britishness equals zero (take the derivative in relation to unemplrisk). Since that value is not substantively meaningful, we focus on the interaction and predicted effects rather than the main coefficient.*
 
@@ -1175,3 +1202,29 @@ The contrast between the Englishness and Britishness specifications highlights a
 A comparison between the Britishness and Englishness specifications further clarifies the role of perceived unemployment risk at the individual level. In both sets of models, unemployment risk fails to exert a strong or consistent direct effect on immigration attitudes and does not meaningfully moderate the association between national identification and attitudes toward immigration. However, the identity coefficients themselves behave differently across the two identity measures. In the Britishness models, perceived unemployment risk neither attenuates nor amplifies the effect of national identity, and any small positive coefficients that emerge are conditional, unstable, and substantively negligible. By contrast, in the Englishness models, national identification remains statistically significant and stable once unemployment risk is introduced, and subjective economic insecurity exhibits a more interpretable alignment with immigration attitudes, even in the absence of robust interaction effects. This contrast suggests that Britishness operates as an identity dimension largely insulated from individual-level economic anxiety, whereas Englishness is more closely intertwined with perceptions of economic vulnerability. As with income, unemployment risk does not mechanically activate identity effects, but its inclusion highlights meaningful differences in the economic embeddedness of British versus English national identification.
 
 The fact that perceived unemployment risk is statistically significant in economics-only models but becomes insignificant once Englishness is introduced does not undermine the argument; rather, it provides evidence that subjective economic insecurity operates through national identity rather than exerting an independent attitudinal effect. Once identity is accounted for, unemployment risk has no residual explanatory power, consistent with an identity-activation rather than an economic-moderation mechanism.
+
+```{r englishness_risk_models_1, echo=FALSE, message=FALSE, warning=FALSE}
+# ==========================================================
+# Diagnostic: Does unemployment risk predict Britishness?
+# ==========================================================
+
+# (5) Britishness ~ risk (no age)
+m_engl_risk_noage_engl <- feols(
+  engl ~ risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+# (6) Britishness ~ risk + age
+m_engl_risk_engl <- feols(
+  engl ~ risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+summary(m_engl_risk_noage_engl)
+summary(m_engl_risk_engl)
+
+```
+
+To further examine whether perceived unemployment risk reshapes national identity itself, I estimate respondent fixed-effects models with Englishness as the dependent variable. As in the Britishness specification, perceived unemployment risk exhibits a small but statistically significant negative association with national identification. Within individuals, increases in perceived unemployment risk are associated with marginal declines in Englishness, and this estimate remains virtually unchanged once age is included as a control. However, despite statistical precision, the substantive magnitude of the coefficient is extremely small, and the within R² is close to zero, indicating that perceived unemployment risk explains only a negligible share of within-person variation in English identification. In practical terms, short-run changes in subjective economic insecurity are not meaningfully restructuring national identity over time. This finding parallels the Britishness results and reinforces the interpretation of the immigration models: while perceived unemployment risk may correlate weakly with identity shifts, it does not operate as a powerful driver of national identification. Instead, identity remains comparatively stable, and the disappearance of the risk effect in interacted immigration models reflects limited independent explanatory power rather than strong multicollinearity or identity substitution dynamics.
