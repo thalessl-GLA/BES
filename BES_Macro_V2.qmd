@@ -170,35 +170,70 @@ df_long <- df_long %>%
 # ======================================
 # 5) Model runner (same 4-model structure)
 # ======================================
+
 models_gdp <- list(
-  main     = feols(dv ~ brit + gdp_pc        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ brit + gdp_pc + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ brit * gdp_pc        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ brit * gdp_pc + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + gdp_pc        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + gdp_pc + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * gdp_pc        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * gdp_pc + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_unemp <- list(
-  main     = feols(dv ~ brit + unempl_rate        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ brit + unempl_rate + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ brit * unempl_rate        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ brit * unempl_rate + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + unempl_rate        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + unempl_rate + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * unempl_rate        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * unempl_rate + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_claim <- list(
-  main     = feols(dv ~ brit + claimant_k        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ brit + claimant_k + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ brit * claimant_k        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ brit * claimant_k + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ claimant_k + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + claimant_k        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + claimant_k + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * claimant_k        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * claimant_k + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_cpih <- list(
-  main     = feols(dv ~ brit + cpih_rate        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ brit + cpih_rate + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ brit * cpih_rate        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ brit * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + cpih_rate        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) | id, 
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + cpih_rate + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * cpih_rate        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
 )
-
-
 ```
 
 ```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
@@ -238,22 +273,30 @@ All models are estimated using linear fixed-effects regressions that include ind
 
 # 6) Print model summaries 
 list(
+  gdp_main_noage_econ     = models_gdp$main_0,
   gdp_main_noage     = models_gdp$main,
+  gdp_main_age_econ       = models_gdp$main_age_0,
   gdp_main_age       = models_gdp$main_age,
   gdp_int_noage      = models_gdp$int,
   gdp_int_age        = models_gdp$int_age,
 
+  unemp_main_noage_econ   = models_unemp$main_0,
   unemp_main_noage   = models_unemp$main,
+  unemp_main_age_econ     = models_unemp$main_age_0,
   unemp_main_age     = models_unemp$main_age,
   unemp_int_noage    = models_unemp$int,
   unemp_int_age      = models_unemp$int_age,
 
+  claimant_main_noage_econ = models_claim$main_0,
   claimant_main_noage = models_claim$main,
+  claimant_main_age_econ   = models_claim$main_age_0,
   claimant_main_age   = models_claim$main_age,
   claimant_int_noage  = models_claim$int,
   claimant_int_age    = models_claim$int_age,
 
+  cpih_main_noage_econ    = models_cpih$main_0,
   cpih_main_noage    = models_cpih$main,
+  cpih_main_age_econ      = models_cpih$main_age_0,
   cpih_main_age      = models_cpih$main_age,
   cpih_int_noage     = models_cpih$int,
   cpih_int_age       = models_cpih$int_age
@@ -545,35 +588,70 @@ df_long <- df_long %>%
 # ======================================
 # 5) Model runner (same 4-model structure) — ENGLISHNESS
 # ======================================
+
 models_gdp <- list(
-  main     = feols(dv ~ engl + gdp_pc        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ engl + gdp_pc + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ engl * gdp_pc        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ engl * gdp_pc + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ engl + gdp_pc        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + gdp_pc + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ engl * gdp_pc        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * gdp_pc + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_unemp <- list(
-  main     = feols(dv ~ engl + unempl_rate        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ engl + unempl_rate + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ engl * unempl_rate        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ engl * unempl_rate + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ engl + unempl_rate        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + unempl_rate + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ engl * unempl_rate        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * unempl_rate + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_claim <- list(
-  main     = feols(dv ~ engl + claimant_k        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ engl + claimant_k + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ engl * claimant_k        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ engl * claimant_k + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ engl + claimant_k        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + claimant_k + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ engl * claimant_k        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * claimant_k + age  | id + wave, data = df_long, cluster = ~id)
 )
 
 models_cpih <- list(
-  main     = feols(dv ~ engl + cpih_rate        | id + wave, data = df_long, cluster = ~id),
-  main_age = feols(dv ~ engl + cpih_rate + age  | id + wave, data = df_long, cluster = ~id),
-  int      = feols(dv ~ engl * cpih_rate        | id + wave, data = df_long, cluster = ~id),
-  int_age  = feols(dv ~ engl * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
+  main_0      = feols(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ engl + cpih_rate        | id + wave, data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + cpih_rate + age  | id + wave, data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ engl * cpih_rate        | id + wave, data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * cpih_rate + age  | id + wave, data = df_long, cluster = ~id)
 )
-
-
 ```
 
 To assess whether the patterns identified using Britishness are specific to the state-level national identity or instead reflect a more general role of national attachment, we replicate the full set of macro-level models using Englishness as an alternative identity measure. Englishness captures a sub-national, territorially bounded form of identification that is conceptually distinct from Britishness and has been shown to carry different political meanings, particularly in relation to immigration and economic grievances. Re-estimating all specifications with Englishness allows us to evaluate whether economic context conditions immigration attitudes through national identification broadly, or whether these effects depend on the specific institutional and symbolic content of the identity invoked. Methodologically, this exercise follows an identical empirical strategy to the Britishness analyses: Englishness is treated as a continuous variable, cleaned to retain only valid scale values, and entered both as a main effect and in interaction with economic indicators, while controlling for individual and wave fixed effects. This parallel specification ensures that any differences between Britishness and Englishness reflect substantive distinctions in identity content rather than modelling choices, and provides a stringent test of the claim that economic context activates only certain forms of national identification in shaping immigration attitudes.
@@ -581,22 +659,30 @@ To assess whether the patterns identified using Britishness are specific to the 
 ```{r macro englishness summaries, echo=FALSE, warning=FALSE, message=FALSE}
 
 list(
+  gdp_main_noage_engl_econ = models_gdp$main_0,
   gdp_main_noage_engl = models_gdp$main,
+  gdp_main_age_engl_econ   = models_gdp$main_age_0,
   gdp_main_age_engl   = models_gdp$main_age,
   gdp_int_noage_engl  = models_gdp$int,
   gdp_int_age_engl    = models_gdp$int_age,
 
+  unemp_main_noage_engl_econ = models_unemp$main_0,
   unemp_main_noage_engl = models_unemp$main,
+  unemp_main_age_engl_econ   = models_unemp$main_age_0,
   unemp_main_age_engl   = models_unemp$main_age,
   unemp_int_noage_engl  = models_unemp$int,
   unemp_int_age_engl    = models_unemp$int_age,
 
+  claimant_main_noage_engl_econ = models_claim$main_0,
   claimant_main_noage_engl = models_claim$main,
+  claimant_main_age_engl_econ   = models_claim$main_age_0,
   claimant_main_age_engl   = models_claim$main_age,
   claimant_int_noage_engl  = models_claim$int,
   claimant_int_age_engl    = models_claim$int_age,
 
+  cpih_main_noage_engl_econ = models_cpih$main_0,
   cpih_main_noage_engl = models_cpih$main,
+  cpih_main_age_engl_econ   = models_cpih$main_age_0,
   cpih_main_age_engl   = models_cpih$main_age,
   cpih_int_noage_engl  = models_cpih$int,
   cpih_int_age_engl    = models_cpih$int_age
