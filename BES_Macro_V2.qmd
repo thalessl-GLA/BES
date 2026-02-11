@@ -14,7 +14,7 @@ library(lubridate)
 library(fixest)
 library(haven)
 
-df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3.rds")
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
 
 DV_BASE    <- "immigSelf"
 BRIT_BASE  <- "britishness"
