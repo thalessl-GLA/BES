@@ -489,15 +489,21 @@ As a further robustness check, I re-estimate the micro-level income models using
 
 RISK_BASE <- "riskUnemployment"
 
-# ---------- build long panels ----------
+# ---------- build long panel ----------
 panel_risk_noage <- make_long_with_income(
   df,
   DV_BASE,
   BRIT_BASE,
   TIME_BASE,
-  income_base = RISK_BASE,   # reuse function; rename later
+  income_base = RISK_BASE,
   age_base = NULL
 )
+
+# rename first (income -> risk_unemp), then clean
+panel_risk_noage <- panel_risk_noage %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
 
 panel_risk_age <- make_long_with_income(
   df,
@@ -506,14 +512,11 @@ panel_risk_age <- make_long_with_income(
   TIME_BASE,
   income_base = RISK_BASE,
   age_base = AGE_BASE
-)
+) %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
 
-# Rename for clarity
-panel_risk_noage <- panel_risk_noage |>
-  dplyr::rename(risk_unemp = income)
-
-panel_risk_age <- panel_risk_age |>
-  dplyr::rename(risk_unemp = income)
 
 # ---------- Models ----------
 # (0.1) Risk sole, no age
