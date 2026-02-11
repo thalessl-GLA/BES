@@ -13,7 +13,7 @@ library(fixest)
 library(haven)
 library(purrr)
 
-df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3.rds")
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
 
 DV_BASE   <- "immigSelf"
 BRIT_BASE <- "britishness"
@@ -131,7 +131,7 @@ In baseline respondent fixed-effects models with wave fixed effects, increases i
 ```{r flexible wave, echo=FALSE, warning=FALSE, message=FALSE}
 
 m_wave <- feols(
-  dv ~ i(wave, brit, ref = 7) | id,
+  dv ~ i(wave, brit) | id,
   data = panel_self,
   cluster = "id"
 )
@@ -141,7 +141,7 @@ summary(m_wave)
 iplot(
   m_wave,
   xlab = "Wave",
-  main = "Wave-specific effect of Britishness on immigration self-placement (ref = W7)"
+  main = "Wave-specific effect of Britishness on immigration self-placement"
 )
 
 ```
@@ -252,6 +252,13 @@ panel_income_age <- make_long_with_income(
 )
 
 # ---------- Models ----------
+# (0.1) Income  SOLE, WITHOUT age
+m_inc_0.1 <- feols(
+  dv ~ income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
 # (1) Income  WITHOUT age
 m_inc_1 <- feols(
   dv ~ brit + income | id + wave,
@@ -259,7 +266,14 @@ m_inc_1 <- feols(
   cluster = "id"
 )
 
-# (2) Income  WITH age
+# (0.2) Income  WITH age
+m_inc_0.2 <- feols(
+  dv ~ income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# (2) Income  SOLE, WITH age
 m_inc_2 <- feols(
   dv ~ brit + income + age | id + wave,
   data = panel_income_age,
@@ -283,8 +297,10 @@ m_inc_4 <- feols(
 
 ```{r income 1, echo=FALSE, warning=FALSE, message=FALSE}
 
+summary(m_inc_0.1)
 summary(m_inc_1)
 summary(m_inc_2)
+summary(m_inc_0.2)
 summary(m_inc_3)
 summary(m_inc_4)
 ```
@@ -366,9 +382,21 @@ if(nrow(panel_eq05_noage) == 0 || nrow(panel_eq05_age) == 0){
 }
 
 # --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_0.1 <- feols(
+  dv ~ income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
 m_eq03_1 <- feols(
   dv ~ brit + income_eq_child03 | id + wave,
   data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_0.2 <- feols(
+  dv ~ income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
   cluster = "id"
 )
 
@@ -391,9 +419,21 @@ m_eq03_4 <- feols(
 )
 
 # --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_0.1 <- feols(
+  dv ~ income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
 m_eq05_1 <- feols(
   dv ~ brit + income_eq_child05 | id + wave,
   data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_0.2 <- feols(
+  dv ~ income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
   cluster = "id"
 )
 
@@ -419,7 +459,9 @@ m_eq05_4 <- feols(
 
 ```{r income_equivalised_results 1, echo=FALSE, warning=FALSE, message=FALSE}
 # Bound A: child weight = 0.3 (lower bound)
+summary(m_eq03_0.1)
 summary(m_eq03_1)
+summary(m_eq03_0.2)
 summary(m_eq03_2)
 summary(m_eq03_3)
 summary(m_eq03_4)
@@ -430,7 +472,9 @@ Using the conservative lower-bound assumption that all dependent children receiv
 
 ```{r income_equivalised_results 2, echo=FALSE, warning=FALSE, message=FALSE}
 # Bound B: child weight = 0.5 (upper bound)
+summary(m_eq05_0.1)
 summary(m_eq05_1)
+summary(m_eq05_0.2)
 summary(m_eq05_2)
 summary(m_eq05_3)
 summary(m_eq05_4)
@@ -472,10 +516,24 @@ panel_risk_age <- panel_risk_age |>
   dplyr::rename(risk_unemp = income)
 
 # ---------- Models ----------
+# (0.1) Risk sole, no age
+m_risk_0.1 <- feols(
+  dv ~ risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
 # (1) Main effects, no age
 m_risk_1 <- feols(
   dv ~ brit + risk_unemp | id + wave,
   data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (0.2) risk sole, with age
+m_risk_0.2 <- feols(
+  dv ~ risk_unemp + age | id + wave,
+  data = panel_risk_age,
   cluster = "id"
 )
 
@@ -505,7 +563,9 @@ summary(m_risk_1) summary(m_risk_2) summary(m_risk_3) summary(m_risk_4)
 
 ```{r risk 1, echo=FALSE, warning=FALSE, message=FALSE}
 
+summary(m_risk_0.1)
 summary(m_risk_1)
+summary(m_risk_0.2)
 summary(m_risk_2)
 summary(m_risk_3)
 summary(m_risk_4)
@@ -918,9 +978,21 @@ if(nrow(panel_eng_eq05_noage) == 0 || nrow(panel_eng_eq05_age) == 0){
 # -----------------------------
 # Models: child weight = 0.3
 # -----------------------------
+m_eng_eq03_0.1 <- feols(
+  dv ~ income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
 m_eng_eq03_1 <- feols(
   dv ~ engl + income_eq_child03 | id + wave,
   data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_0.2 <- feols(
+  dv ~ income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
   cluster = "id"
 )
 
@@ -945,9 +1017,21 @@ m_eng_eq03_4 <- feols(
 # -----------------------------
 # Models: child weight = 0.5
 # -----------------------------
+m_eng_eq05_0.1 <- feols(
+  dv ~ income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
 m_eng_eq05_1 <- feols(
   dv ~ engl + income_eq_child05 | id + wave,
   data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_0.2 <- feols(
+  dv ~ income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
   cluster = "id"
 )
 
@@ -970,8 +1054,8 @@ m_eng_eq05_4 <- feols(
 )
 
 # Output
-summary(m_eng_eq03_1); summary(m_eng_eq03_2); summary(m_eng_eq03_3); summary(m_eng_eq03_4)
-summary(m_eng_eq05_1); summary(m_eng_eq05_2); summary(m_eng_eq05_3); summary(m_eng_eq05_4)
+summary(m_eng_eq03_0.1); summary(m_eng_eq03_1); summary(m_eng_eq03_0.2); summary(m_eng_eq03_2); summary(m_eng_eq03_3); summary(m_eng_eq03_4) 
+summary(m_eng_eq05_0.1); summary(m_eng_eq05_1); summary(m_eng_eq05_0.2); summary(m_eng_eq05_2); summary(m_eng_eq05_3); summary(m_eng_eq05_4)
 
 
 ```
@@ -981,6 +1065,8 @@ Across all specifications using equivalised household income, Englishness retain
 Comparing the Englishness and Britishness specifications reveals a clear pattern. In both sets of models, equivalised household income does not display a statistically significant association with immigration attitudes, nor does it condition the relationship between national identification and attitudes toward immigration. The key difference lies in the identity coefficients themselves. In the Englishness models, national identification remains consistently negative and statistically significant once income is introduced, with a stable magnitude across specifications. By contrast, in the Britishness models estimated on the same samples and with identical controls, the coefficient on Britishness is small, statistically insignificant, and imprecisely estimated. This contrast indicates that conditioning on income does not attenuate the attitudinal relevance of Englishness, but it does render the Britishness association indistinguishable from zero. Together, these results suggest that Englishness captures a dimension of national identity that is more directly and robustly linked to immigration attitudes than Britishness, even when individual economic resources are explicitly accounted for.
 
 Taken together, the income robustness results highlight an important distinction between the two forms of national identification. While equivalised household income does not meaningfully shape immigration attitudes in either set of models, its inclusion clarifies differences in the attitudinal relevance of identity. Englishness remains a stable and statistically significant predictor once income is accounted for, whereas the association between Britishness and immigration attitudes is attenuated and becomes indistinguishable from zero. This pattern suggests that Englishness is less tightly bound to individuals’ material economic position and instead reflects a more politicised identity dimension, while Britishness appears more sensitive to the inclusion of economic controls. As a result, the Englishness–immigration relationship emerges as more robust to alternative economic specifications than its Britishness counterpart.
+
+A direct comparison between the Britishness and Englishness specifications clarifies the substantive role of income in these models. In neither case does equivalised household income exert a meaningful within-person effect on immigration attitudes, nor does it condition the impact of national identification. However, the inclusion of income sharply differentiates the two identity measures. In the Englishness models, the identity coefficient remains negative, statistically significant, and stable across all income specifications, indicating that English national identification retains an independent and robust association with immigration attitudes. In contrast, in the Britishness models estimated on the same England-only sample, the identity coefficient is substantially attenuated and becomes statistically indistinguishable from zero once income is included, despite income itself having no effect. This pattern suggests that Englishness captures a more politically salient and autonomous identity dimension, whereas Britishness appears less robust when individual economic characteristics are explicitly controlled for. Income therefore does not mediate identity effects, but its inclusion exposes meaningful differences in the attitudinal relevance of Britishness versus Englishness.
 
 ```{r englishness_risk_models, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -1032,9 +1118,21 @@ stopifnot(all(is.na(panel_risk_noage_eng$engl) | panel_risk_noage_eng$engl %in% 
 stopifnot(all(is.na(panel_risk_age_eng$engl)   | panel_risk_age_eng$engl   %in% 1:7))
 
 # --- Models: main effects ---
+m_risk_eng_0.1 <- feols(
+  dv ~ risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
 m_risk_eng_1 <- feols(
   dv ~ engl + risk_unemp | id + wave,
   data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_0.2 <- feols(
+  dv ~ risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
   cluster = "id"
 )
 
@@ -1058,7 +1156,9 @@ m_risk_eng_4 <- feols(
 )
 
 # --- Output ---
+summary(m_risk_eng_0.1)
 summary(m_risk_eng_1)
+summary(m_risk_eng_0.2)
 summary(m_risk_eng_2)
 summary(m_risk_eng_3)
 summary(m_risk_eng_4)
@@ -1068,3 +1168,7 @@ summary(m_risk_eng_4)
 The Englishness-based models indicate a strong and robust association between national identification and immigration attitudes, alongside a modest but statistically significant role for perceived unemployment risk. Across specifications with individual and wave fixed effects, Englishness is consistently negative and highly statistically significant, with coefficients that remain stable when age is included as a control. In contrast to the income models, perceived unemployment risk enters positively and significantly in the main-effects specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes. However, when allowing for an interaction between Englishness and perceived unemployment risk, neither the interaction term nor the main effect of risk reaches statistical significance. This suggests that while perceived economic insecurity is directly related to immigration attitudes among respondents identifying as English, it does not systematically condition the effect of Englishness itself.
 
 The contrast between the Englishness and Britishness specifications highlights an important asymmetry in how perceived economic insecurity relates to immigration attitudes. In the Britishness models, perceived unemployment risk does not exert a statistically significant main effect, nor does it condition the association between Britishness and immigration attitudes. By contrast, in the Englishness models, perceived unemployment risk enters as a positive and statistically significant main effect in the baseline specifications, indicating that increases in perceived risk are associated with more negative immigration attitudes among respondents for whom Englishness is salient. At the same time, the interaction between Englishness and risk remains statistically insignificant, suggesting that economic insecurity does not systematically amplify or dampen the effect of Englishness itself. This pattern differs from the income robustness results, where economic resources were unrelated to immigration attitudes under both identity measures. Taken together, the findings suggest that subjective perceptions of economic vulnerability, rather than objective income position, are selectively linked to immigration attitudes in the context of English national identification, while remaining largely irrelevant when Britishness is the operative identity.
+
+A comparison between the Britishness and Englishness specifications further clarifies the role of perceived unemployment risk at the individual level. In both sets of models, unemployment risk fails to exert a strong or consistent direct effect on immigration attitudes and does not meaningfully moderate the association between national identification and attitudes toward immigration. However, the identity coefficients themselves behave differently across the two identity measures. In the Britishness models, perceived unemployment risk neither attenuates nor amplifies the effect of national identity, and any small positive coefficients that emerge are conditional, unstable, and substantively negligible. By contrast, in the Englishness models, national identification remains statistically significant and stable once unemployment risk is introduced, and subjective economic insecurity exhibits a more interpretable alignment with immigration attitudes, even in the absence of robust interaction effects. This contrast suggests that Britishness operates as an identity dimension largely insulated from individual-level economic anxiety, whereas Englishness is more closely intertwined with perceptions of economic vulnerability. As with income, unemployment risk does not mechanically activate identity effects, but its inclusion highlights meaningful differences in the economic embeddedness of British versus English national identification.
+
+The fact that perceived unemployment risk is statistically significant in economics-only models but becomes insignificant once Englishness is introduced does not undermine the argument; rather, it provides evidence that subjective economic insecurity operates through national identity rather than exerting an independent attitudinal effect. Once identity is accounted for, unemployment risk has no residual explanatory power, consistent with an identity-activation rather than an economic-moderation mechanism.
