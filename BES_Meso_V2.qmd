@@ -14,7 +14,7 @@ library(fixest)
 library(haven)
 library(purrr)
 
-df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3.rds")
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
 
 DV_BASE   <- "immigSelf"
 BRIT_BASE <- "britishness"
@@ -134,7 +134,9 @@ if(!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = 
 # ---------- UNEMPLOYMENT RATE (APS) ----------
 panel_u <- panel_meso |> filter(!is.na(unemp_rate_mean))
 
+m_u0.1 <- feols(dv ~ unemp_rate_mean             | id + wave, data = panel_u, cluster = "id")
 m_u1 <- feols(dv ~ brit + unemp_rate_mean        | id + wave, data = panel_u, cluster = "id")
+m_u0.2 <- feols(dv ~ unemp_rate_mean + age       | id + wave, data = panel_u, cluster = "id")
 m_u2 <- feols(dv ~ brit + unemp_rate_mean + age  | id + wave, data = panel_u, cluster = "id")
 m_u3 <- feols(dv ~ brit * unemp_rate_mean        | id + wave, data = panel_u, cluster = "id")
 m_u4 <- feols(dv ~ brit * unemp_rate_mean + age  | id + wave, data = panel_u, cluster = "id")
@@ -142,7 +144,9 @@ m_u4 <- feols(dv ~ brit * unemp_rate_mean + age  | id + wave, data = panel_u, cl
 # ---------- CLAIMANT COUNT ----------
 panel_c <- panel_meso |> filter(!is.na(claimant_mean))
 
+m_c0.1 <- feols(dv ~ claimant_mean              | id + wave, data = panel_c, cluster = "id")
 m_c1 <- feols(dv ~ brit + claimant_mean         | id + wave, data = panel_c, cluster = "id")
+m_c0.2 <- feols(dv ~ claimant_mean + age        | id + wave, data = panel_c, cluster = "id")
 m_c2 <- feols(dv ~ brit + claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
 m_c3 <- feols(dv ~ brit * claimant_mean         | id + wave, data = panel_c, cluster = "id")
 m_c4 <- feols(dv ~ brit * claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
@@ -150,7 +154,9 @@ m_c4 <- feols(dv ~ brit * claimant_mean + age   | id + wave, data = panel_c, clu
 # ---------- ASHE EARNINGS (income_meso) ----------
 panel_i <- panel_meso |> filter(!is.na(income_meso))
 
+m_i0.1 <- feols(dv ~ income_meso                | id + wave, data = panel_i, cluster = "id")
 m_i1 <- feols(dv ~ brit + income_meso           | id + wave, data = panel_i, cluster = "id")
+m_i0.2 <- feols(dv ~ income_meso + age          | id + wave, data = panel_i, cluster = "id")
 m_i2 <- feols(dv ~ brit + income_meso + age     | id + wave, data = panel_i, cluster = "id")
 m_i3 <- feols(dv ~ brit * income_meso           | id + wave, data = panel_i, cluster = "id")
 m_i4 <- feols(dv ~ brit * income_meso + age     | id + wave, data = panel_i, cluster = "id")
@@ -178,15 +184,21 @@ All models are estimated using linear fixed-effects regressions that include ind
 
 # 6) Print model summaries (compact)
 list(
+  unemp_main_noage = m_u0.1,
   unemp_main_noage = m_u1,
+  unemp_main_age   = m_u0.2,
   unemp_main_age   = m_u2,
   unemp_int_noage  = m_u3,
   unemp_int_age    = m_u4,
+  claimant_main_noage = m_c0.1,
   claimant_main_noage = m_c1,
+  claimant_main_age   = m_c0.2,
   claimant_main_age   = m_c2,
   claimant_int_noage  = m_c3,
   claimant_int_age    = m_c4,
+  income_main_noage = m_i0.1,
   income_main_noage = m_i1,
+  income_main_age   = m_i0.2,
   income_main_age   = m_i2,
   income_int_noage  = m_i3,
   income_int_age    = m_i4
@@ -472,7 +484,9 @@ print(coverage_eng)
 # ---------- UNEMPLOYMENT RATE ----------
 panel_u_eng <- panel_meso_eng |> filter(!is.na(unemp_rate_mean))
 
+m_u0.1_eng <- feols(dv ~ unemp_rate_mean             | id + wave, data = panel_u_eng, cluster = "id")
 m_u1_eng <- feols(dv ~ engl + unemp_rate_mean        | id + wave, data = panel_u_eng, cluster = "id")
+m_u0.2_eng <- feols(dv ~ unemp_rate_mean + age       | id + wave, data = panel_u_eng, cluster = "id")
 m_u2_eng <- feols(dv ~ engl + unemp_rate_mean + age  | id + wave, data = panel_u_eng, cluster = "id")
 m_u3_eng <- feols(dv ~ engl * unemp_rate_mean        | id + wave, data = panel_u_eng, cluster = "id")
 m_u4_eng <- feols(dv ~ engl * unemp_rate_mean + age  | id + wave, data = panel_u_eng, cluster = "id")
@@ -480,7 +494,9 @@ m_u4_eng <- feols(dv ~ engl * unemp_rate_mean + age  | id + wave, data = panel_u
 # ---------- CLAIMANT COUNT ----------
 panel_c_eng <- panel_meso_eng |> filter(!is.na(claimant_mean))
 
+m_c0.1_eng <- feols(dv ~ claimant_mean              | id + wave, data = panel_c_eng, cluster = "id")
 m_c1_eng <- feols(dv ~ engl + claimant_mean         | id + wave, data = panel_c_eng, cluster = "id")
+m_c0.2_eng <- feols(dv ~ claimant_mean + age        | id + wave, data = panel_c_eng, cluster = "id")
 m_c2_eng <- feols(dv ~ engl + claimant_mean + age   | id + wave, data = panel_c_eng, cluster = "id")
 m_c3_eng <- feols(dv ~ engl * claimant_mean         | id + wave, data = panel_c_eng, cluster = "id")
 m_c4_eng <- feols(dv ~ engl * claimant_mean + age   | id + wave, data = panel_c_eng, cluster = "id")
@@ -488,7 +504,9 @@ m_c4_eng <- feols(dv ~ engl * claimant_mean + age   | id + wave, data = panel_c_
 # ---------- LOCAL INCOME (ASHE) ----------
 panel_i_eng <- panel_meso_eng |> filter(!is.na(income_meso))
 
+m_i0.1_eng <- feols(dv ~ income_meso                | id + wave, data = panel_i_eng, cluster = "id")
 m_i1_eng <- feols(dv ~ engl + income_meso           | id + wave, data = panel_i_eng, cluster = "id")
+m_i0.2_eng <- feols(dv ~        income_meso + age     | id + wave, data = panel_i_eng, cluster = "id")
 m_i2_eng <- feols(dv ~ engl + income_meso + age     | id + wave, data = panel_i_eng, cluster = "id")
 m_i3_eng <- feols(dv ~ engl * income_meso           | id + wave, data = panel_i_eng, cluster = "id")
 m_i4_eng <- feols(dv ~ engl * income_meso + age     | id + wave, data = panel_i_eng, cluster = "id")
@@ -504,15 +522,21 @@ Methodologically, the Englishness models replicate the original Britishness pipe
 # Quick output (compact)
 lapply(
   list(
+    unemp_main_noage = m_u0.1_eng,
     unemp_main_noage = m_u1_eng,
+    unemp_main_age   = m_u0.2_eng,
     unemp_main_age   = m_u2_eng,
     unemp_int_noage  = m_u3_eng,
     unemp_int_age    = m_u4_eng,
+    claimant_main_noage = m_c0.1_eng,
     claimant_main_noage = m_c1_eng,
+    claimant_main_age   = m_c0.2_eng,
     claimant_main_age   = m_c2_eng,
     claimant_int_noage  = m_c3_eng,
     claimant_int_age    = m_c4_eng,
+    income_main_noage = m_i0.1_eng,
     income_main_noage = m_i1_eng,
+    income_main_age   = m_i0.2_eng,
     income_main_age   = m_i2_eng,
     income_int_noage  = m_i3_eng,
     income_int_age    = m_i4_eng
