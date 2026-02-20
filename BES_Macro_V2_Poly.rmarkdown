@@ -1,0 +1,810 @@
+---
+title: "BES_Macro"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(lubridate)
+library(fixest)
+library(haven)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE    <- "immigSelf"
+BRIT_BASE  <- "britishness"
+TIME_BASE  <- "starttime"  
+AGE_BASE   <- "age"
+
+# Macro families (in your macro-augmented dataset)
+MACRO_GDP_BASE    <- "gdp_pc"
+MACRO_UNEMP_BASE  <- "unempl_rate"
+MACRO_CLAIM_BASE  <- "claimant_k"
+MACRO_CPIH_BASE   <- "cpih_rate"
+
+# -------------------------
+# Helpers (same spirit as meso)
+# -------------------------
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+zap_if_labelled <- function(x){
+  if (inherits(x, "haven_labelled")) return(zap_labels(x))
+  x
+}
+
+# ======================================================
+# 1) Choose waves where DV + brit + (optional) time exist
+# ======================================================
+
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves_core <- Reduce(intersect, list(w_dv, w_brit, w_time))
+if(length(waves_core) < 3) stop("Too few overlapping waves across DV, britishness, and starttime.")
+
+# Age overlap (optional)
+w_age <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves_core, w_age)
+
+# Macro overlap (ensures each macro series exists for the waves we will use)
+w_gdp   <- waves_available(df, MACRO_GDP_BASE)
+w_unemp <- waves_available(df, MACRO_UNEMP_BASE)
+w_claim <- waves_available(df, MACRO_CLAIM_BASE)
+w_cpih  <- waves_available(df, MACRO_CPIH_BASE)
+
+waves_macro <- Reduce(intersect, list(waves_core, w_gdp, w_unemp, w_claim, w_cpih))
+if(length(waves_macro) < 3) stop("Too few overlapping waves across DV/brit/time and macro series.")
+
+# =========================================
+# 2) Build wide core dataset (dv/brit/time/age)
+# =========================================
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves_macro),
+  paste0(BRIT_BASE, "W", waves_macro),
+  paste0(TIME_BASE, "W", waves_macro),
+  paste0(AGE_BASE,  "W", intersect(waves_macro, w_age))
+)
+
+df_core <- df %>%
+  mutate(across(any_of(core_cols), zap_if_labelled)) %>%
+  select(id, any_of(core_cols))
+
+# =========================================
+# 3) Reshape core to long 
+# =========================================
+
+# (A) DV + Britishness (numeric)
+df_long_core <- df_core %>%
+  pivot_longer(
+    cols = matches(paste0("^(", DV_BASE, "|", BRIT_BASE, ")W\\d+$")),
+    names_to = c("var", "wave"),
+    names_pattern = "^(.*)W(\\d+)$",
+    values_to = "value"
+  ) %>%
+  mutate(wave = as.integer(wave)) %>%
+  pivot_wider(names_from = var, values_from = value) %>%
+  rename(
+    dv   = !!DV_BASE,
+    brit = !!BRIT_BASE
+  )
+
+# (B) starttime separately (datetime-safe; keep as character to avoid tz issues)
+df_long_time <- df_core %>%
+  pivot_longer(
+    cols = matches(paste0("^", TIME_BASE, "W\\d+$")),
+    names_to = "wave",
+    names_pattern = paste0("^", TIME_BASE, "W(\\d+)$"),
+    values_to = "time"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    time = as.character(time)
+  )
+
+# Merge core + time
+df_long <- df_long_core %>%
+  left_join(df_long_time, by = c("id", "wave"))
+
+# (C) Add age (optional, only where available)
+if(length(intersect(waves_macro, w_age)) > 0){
+  age_long <- df_core %>%
+    pivot_longer(
+      cols = matches(paste0("^", AGE_BASE, "W\\d+$")),
+      names_to = "wave",
+      names_pattern = paste0("^", AGE_BASE, "W(\\d+)$"),
+      values_to = "age"
+    ) %>%
+    mutate(wave = as.integer(wave))
+
+  df_long <- df_long %>%
+    left_join(age_long, by = c("id", "wave"))
+}
+
+# Derive year (optional diagnostics)
+df_long <- df_long %>%
+  mutate(
+    time = suppressWarnings(lubridate::ymd_hms(time, quiet = TRUE)),
+    year = lubridate::year(time)
+  )
+
+# ==========================================================
+# 4) Attach macro variables (wide-by-wave -> long, by id×wave)
+# ==========================================================
+# Helper: take any BASE (e.g., gdp_pc) and convert BASEW# to long
+macro_long_from_base <- function(df, base, waves_keep){
+  cols <- paste0(base, "W", waves_keep)
+  out <- df %>%
+    select(id, any_of(cols)) %>%
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      names_pattern = paste0("^", base, "W(\\d+)$"),
+      values_to = base
+    ) %>%
+    mutate(wave = as.integer(wave))
+  out
+}
+
+macro_gdp   <- macro_long_from_base(df, MACRO_GDP_BASE,   waves_macro)
+macro_unemp <- macro_long_from_base(df, MACRO_UNEMP_BASE, waves_macro)
+macro_claim <- macro_long_from_base(df, MACRO_CLAIM_BASE, waves_macro)
+macro_cpih  <- macro_long_from_base(df, MACRO_CPIH_BASE,  waves_macro)
+
+df_long <- df_long %>%
+  left_join(macro_gdp,   by = c("id", "wave")) %>%
+  left_join(macro_unemp, by = c("id", "wave")) %>%
+  left_join(macro_claim, by = c("id", "wave")) %>%
+  left_join(macro_cpih,  by = c("id", "wave"))
+
+# ======================================
+# 5) Model runner (macro-consistent: id FE + polynomial time)
+# ======================================
+
+models_gdp <- list(
+  # econ only
+  main_0      = feols(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  # main (brit + econ)
+  main        = feols(dv ~ brit + gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  # econ only + age
+  main_age_0  = feols(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  # main + age
+  main_age    = feols(dv ~ brit + gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  # interaction
+  int         = feols(dv ~ brit * gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  # interaction + age
+  int_age     = feols(dv ~ brit * gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id)
+)
+
+models_unemp <- list(
+  main_0      = feols(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id)
+)
+
+models_claim <- list(
+  main_0      = feols(dv ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id)
+)
+
+models_cpih <- list(
+  main_0      = feols(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main        = feols(dv ~ brit + cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age_0  = feols(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  main_age    = feols(dv ~ brit + cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int         = feols(dv ~ brit * cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id),
+
+  int_age     = feols(dv ~ brit * cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long, cluster = ~id)
+)
+
+# ======================================
+# 6) Econ rob checks
+# ======================================
+
+brit_econ_rob_checks <- list(
+  brit_gdp = feols(brit ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_unempl_rate = feols(brit ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_claimant_k = feols(brit ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id),
+  brit_cpih_rate = feols(brit ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                     data = df_long, cluster = ~id))
+  
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# 5) sanity: coverage conditional on DV/brit being observed
+coverage_macro <- df_long |>
+  summarise(
+    n_obs = n(),
+    pct_gdp_nonmiss     = mean(!is.na(gdp_pc)),
+    pct_unemp_nonmiss   = mean(!is.na(unempl_rate)),
+    pct_claim_nonmiss   = mean(!is.na(claimant_k)),
+    pct_cpih_nonmiss    = mean(!is.na(cpih_rate)),
+    pct_age_nonmiss     = mean(!is.na(age))
+  )
+
+print(coverage_macro)
+
+# Macro vars should have exactly 1 unique value per wave
+macro_constancy <- df_long %>%
+  group_by(wave) %>%
+  summarise(
+    n_obs = n(),
+    gdp_unique     = n_distinct(gdp_pc),
+    unemp_unique   = n_distinct(unempl_rate),
+    claim_unique   = n_distinct(claimant_k),
+    cpih_unique    = n_distinct(cpih_rate)
+  )
+
+print(macro_constancy)
+
+```
+
+The objective of the macro-level analysis is to assess whether national economic conditions, captured through official Office for National Statistics (ONS) indicators such as GDP per capita, unemployment rates, claimant counts, and consumer price inflation (CPIH), shape anti-immigration attitudes, and whether these macroeconomic conditions condition the relationship between individual-level national identification and immigration attitudes. The macro analyses complement the micro- and meso-level results by examining whether broad, economy-wide conditions amplify or attenuate the attitudinal relevance of national identification, beyond individual perceptions and local economic contexts. For a brief description of the macro-level variables, [click here](#macro-vars).
+
+All models are estimated using linear fixed-effects regressions that include individual fixed effects and wave fixed effects. Individual fixed effects control for all time-invariant respondent characteristics, including stable ideological orientations, cohort effects, and baseline levels of national identification, ensuring that identification derives exclusively from within-individual change over time. Wave fixed effects absorb common national shocks and period-specific influences—such as Brexit milestones, macroeconomic cycles, and the COVID-19 pandemic—thereby isolating the conditioning role of macroeconomic context net of contemporaneous nationwide trends. Standard errors are clustered at the individual level. Clustering by respondent accounts for serial correlation and heteroskedasticity arising from repeated observations of the same individuals across survey waves, which constitute the primary source of dependence in the data.
+
+```{r macro models summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+# 6) Print model summaries 
+list(
+  gdp_main_noage_econ     = models_gdp$main_0,
+  gdp_main_noage     = models_gdp$main,
+  gdp_main_age_econ       = models_gdp$main_age_0,
+  gdp_main_age       = models_gdp$main_age,
+  gdp_int_noage      = models_gdp$int,
+  gdp_int_age        = models_gdp$int_age,
+
+  unemp_main_noage_econ   = models_unemp$main_0,
+  unemp_main_noage   = models_unemp$main,
+  unemp_main_age_econ     = models_unemp$main_age_0,
+  unemp_main_age     = models_unemp$main_age,
+  unemp_int_noage    = models_unemp$int,
+  unemp_int_age      = models_unemp$int_age,
+
+  claimant_main_noage_econ = models_claim$main_0,
+  claimant_main_noage = models_claim$main,
+  claimant_main_age_econ   = models_claim$main_age_0,
+  claimant_main_age   = models_claim$main_age,
+  claimant_int_noage  = models_claim$int,
+  claimant_int_age    = models_claim$int_age,
+
+  cpih_main_noage_econ    = models_cpih$main_0,
+  cpih_main_noage    = models_cpih$main,
+  cpih_main_age_econ      = models_cpih$main_age_0,
+  cpih_main_age      = models_cpih$main_age,
+  cpih_int_noage     = models_cpih$int,
+  cpih_int_age       = models_cpih$int_age
+  ) |>
+  lapply(fixest::coeftable)
+
+brit_econ_rob_checks$brit_gdp
+brit_econ_rob_checks$brit_unempl_rate
+brit_econ_rob_checks$brit_claimant_k
+brit_econ_rob_checks$brit_cpih_rate
+```
+
+## Macro-level analysis {.tabset}
+
+### Results
+
+We estimate a sequence of macro-level fixed-effects models to assess whether national economic conditions, measured using official Office for National Statistics (ONS) indicators, are associated with anti-immigration attitudes, and whether these macroeconomic conditions condition the relationship between individual national identification and immigration attitudes. For each macroeconomic indicator, we proceed in two steps. First, we estimate a baseline specification that includes Britishness as the primary explanatory variable, controlling for individual and wave fixed effects. Because macroeconomic indicators vary only at the national–wave level, their main effects are absorbed by wave fixed effects in these specifications. Second, we introduce an interaction between the macroeconomic indicator and Britishness to test whether the attitudinal association of national identification varies systematically across different macroeconomic contexts. All models are estimated using the feols function, which efficiently implements linear fixed-effects regressions with high-dimensional fixed effects and clustered standard errors.
+
+The inclusion of individual fixed effects ensures that estimates are identified exclusively from within-person changes over time, net of all time-invariant characteristics such as baseline ideology, cohort membership, or stable nationalist dispositions. Wave fixed effects absorb common national shocks and period-specific influences, including major political and economic events such as Brexit-related developments, macroeconomic cycles, and the COVID-19 pandemic. As a result, the estimated interaction effects capture how fluctuations in national economic conditions condition the attitudinal relevance of national identification, over and above contemporaneous nationwide trends. Standard errors are clustered at the individual level to account for serial correlation arising from repeated observations of the same respondents across waves. This strategy yields conservative estimates and allows a clean interpretation of macro-level effects as contextual moderators of within-individual attitudinal change.
+
+#### National unemployment rate
+
+Across the baseline specifications, the national unemployment rate exhibits no separately identified main effect on anti-immigration attitudes once individual and wave fixed effects are included. Because unemployment varies only at the national–wave level, its main effect is absorbed by wave fixed effects in these models. As a result, changes in aggregate unemployment are not estimated as direct predictors of within-person attitudinal change in the baseline specifications.
+
+When the interaction between the national unemployment rate and Britishness is introduced, however, a clear and statistically robust pattern emerges. The interaction term is negative and highly statistically significant, indicating that the association between national identification and anti-immigration attitudes becomes more negative as unemployment rises. Substantively, this implies that periods of higher national unemployment are associated with a stronger conditioning role of Britishness: among individuals with weaker national identification, higher unemployment coincides with increased opposition to immigration, whereas among respondents with stronger British identification this association is attenuated. In relative terms, national identification becomes a more salient attitudinal anchor under conditions of heightened labour-market strain.
+
+This pattern is stable across specifications with and without age controls and closely mirrors the moderation structure observed in the meso-level analyses. Taken together, the results suggest that macroeconomic insecurity does not uniformly shift immigration attitudes, but rather amplifies the extent to which national identification structures attitudinal responses during periods of elevated unemployment.
+
+#### Claimant count
+
+Results for the national claimant count closely parallel those obtained for the national unemployment rate. In baseline specifications including individual and wave fixed effects, the claimant count does not exhibit a separately identified main effect on anti-immigration attitudes, as aggregate claimant levels vary only at the national–wave level and are therefore absorbed by wave fixed effects. Consequently, changes in claimant intensity are not estimated as direct predictors of within-person attitudinal change in these models.
+
+Once the interaction between claimant count and Britishness is introduced, however, claimant levels become substantively meaningful. The interaction term is negative and statistically significant, indicating that higher levels of claimant reliance are associated with a stronger conditioning role of national identification. Substantively, increases in claimant count are associated with heightened opposition to immigration among respondents with weaker national identification, while this association attenuates as Britishness increases. In relative terms, national identification appears to structure attitudinal responses to labour-market strain more strongly during periods of elevated welfare dependency.
+
+This moderation pattern is highly stable across specifications, including those controlling for age, and mirrors the structure observed in both the unemployment and meso-level analyses. Together, these findings suggest that objective indicators of aggregate labour-market stress do not exert uniform attitudinal effects, but instead shape immigration attitudes in a conditional manner, reinforcing the role of national identity as a key interpretive lens through which macroeconomic conditions are politically processed.
+
+#### GDP per capita
+
+As with the other macroeconomic indicators, GDP per capita does not have a separately identified main effect on anti-immigration attitudes once individual and wave fixed effects are included, as aggregate income levels vary only at the national–wave level and are therefore absorbed by wave fixed effects. Consequently, changes in GDP per capita are not estimated as direct predictors of within-person attitudinal change in baseline specifications.
+
+When the interaction between GDP per capita and Britishness is introduced, however, a statistically significant pattern emerges. The interaction term is negative and statistically significant, indicating that the association between national identification and anti-immigration attitudes becomes more negative as national income rises. Substantively, this suggests that aggregate economic conditions shape immigration attitudes in a conditional manner: periods of higher national prosperity are associated with a weaker link between macroeconomic context and immigration opposition among individuals with stronger national identification, while respondents with weaker identification remain more responsive to macroeconomic fluctuations.
+
+This pattern is robust to the inclusion of age controls and mirrors the moderation structure observed across the other macro-level indicators, reinforcing the conclusion that national economic conditions primarily operate by conditioning the attitudinal relevance of national identification rather than exerting uniform effects.
+
+#### CPIH (consumer price inflation)
+
+As with the other macroeconomic indicators, CPIH does not exhibit a separately identified main effect on anti-immigration attitudes once individual and wave fixed effects are included, as aggregate inflation varies only at the national–wave level and is therefore absorbed by wave fixed effects. Consequently, changes in consumer price inflation are not estimated as direct predictors of within-person attitudinal change in the baseline specifications.
+
+When the interaction between CPIH and Britishness is introduced, however, a clear and statistically significant pattern emerges. The interaction term is negative and highly statistically significant, indicating that the association between national identification and anti-immigration attitudes becomes more negative as inflation increases. Substantively, this suggests that periods of heightened cost-of-living pressure condition the relationship between national identification and immigration attitudes: among individuals with weaker national identification, rising inflation is associated with increased opposition to immigration, whereas this association attenuates as Britishness strengthens. In relative terms, national identification appears to play a more central role in structuring immigration attitudes during periods of elevated inflation.
+
+This pattern is robust to the inclusion of age controls and mirrors the moderation structure observed across the other macro-level indicators. Taken together, the CPIH results reinforce the conclusion that macroeconomic conditions do not exert uniform attitudinal effects, but instead shape immigration attitudes in a conditional manner by amplifying the role of national identification during periods of economic strain.
+
+::: callout-note
+**Interpretive note.**\
+All macroeconomic indicators operate through the same moderation mechanism: they do not shift immigration attitudes directly, but condition how national identification translates into attitudes. The interaction effects are stable, precisely estimated, and robust across specifications.
+:::
+
+### Robustness Checks
+
+#### Brittishness as Categorical
+
+```{r rob check brit cat, include=FALSE, echo=FALSE}
+# ============================================================
+# Macro robustness: Britishness as categorical (ref = 7)
+# ============================================================
+
+# 0) Ensure numeric + build categorical with 7 as reference
+# Justification: makes the categorical specification directly comparable
+# across micro/meso/macro (same base category = "most British").
+df_long <- df_long %>%
+  mutate(
+    brit_num = as.numeric(brit),
+    brit_cat = factor(brit_num, levels = 1:7) %>% relevel(ref = "7")
+  )
+
+# 1) Helper: run same 4-model structure with brit_cat
+run_macro_cat <- function(varname){
+
+  f_main     <- as.formula(paste0("dv ~ brit_cat + ", varname, " | id + wave"))
+  f_main_age <- as.formula(paste0("dv ~ brit_cat + ", varname, " + age | id + wave"))
+  f_int      <- as.formula(paste0("dv ~ brit_cat * ", varname, " | id + wave"))
+  f_int_age  <- as.formula(paste0("dv ~ brit_cat * ", varname, " + age | id + wave"))
+
+  list(
+    main     = feols(f_main,     data = df_long, cluster = ~id),
+    main_age = feols(f_main_age, data = df_long, cluster = ~id),
+    int      = feols(f_int,      data = df_long, cluster = ~id),
+    int_age  = feols(f_int_age,  data = df_long, cluster = ~id)
+  )
+}
+
+# 2) Run categorical versions for each macro indicator
+models_gdp_cat   <- run_macro_cat("gdp_pc")
+models_unemp_cat <- run_macro_cat("unempl_rate")
+models_claim_cat <- run_macro_cat("claimant_k")
+models_cpih_cat  <- run_macro_cat("cpih_rate")
+
+```
+
+```{r macro categorical summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+list(
+  gdp_main_noage_cat   = models_gdp_cat$main,
+  gdp_main_age_cat     = models_gdp_cat$main_age,
+  gdp_int_noage_cat    = models_gdp_cat$int,
+  gdp_int_age_cat      = models_gdp_cat$int_age,
+
+  unemp_main_noage_cat = models_unemp_cat$main,
+  unemp_main_age_cat   = models_unemp_cat$main_age,
+  unemp_int_noage_cat  = models_unemp_cat$int,
+  unemp_int_age_cat    = models_unemp_cat$int_age,
+
+  claimant_main_noage_cat = models_claim_cat$main,
+  claimant_main_age_cat   = models_claim_cat$main_age,
+  claimant_int_noage_cat  = models_claim_cat$int,
+  claimant_int_age_cat    = models_claim_cat$int_age,
+
+  cpih_main_noage_cat  = models_cpih_cat$main,
+  cpih_main_age_cat    = models_cpih_cat$main_age,
+  cpih_int_noage_cat   = models_cpih_cat$int,
+  cpih_int_age_cat     = models_cpih_cat$int_age
+) |>
+  lapply(fixest::coeftable)
+
+```
+
+Across the categorical macro-level specifications, with the highest level of Britishness (category 7, “most British”) serving as the reference group, the estimated coefficients display a clear and monotonic path. All lower Britishness categories (1–6) are associated with systematically lower values of the dependent variable, indicating greater openness to immigration relative to the most strongly British respondents. Moreover, the magnitude of these differences increases as national identification weakens: the largest gaps are observed for the lowest Britishness categories (particularly categories 1 and 2), while the smallest differences appear for category 6. This pattern is highly stable across specifications with and without age controls and closely mirrors the ordinal structure of the underlying Britishness scale, confirming that the categorical coding preserves the substantive ordering present in the continuous measure.
+
+In the interaction specifications, macroeconomic conditions do not operate by shifting immigration attitudes uniformly across respondents. Instead, they systematically condition the Britishness gradient itself. Higher national unemployment is associated with a widening attitudinal gap between respondents with weak national identification and the most British group, as indicated by positive and statistically significant brit_cat\*unemployment interactions across most categories. A similar pattern emerges for claimant count: increases in national claimant intensity are associated with larger differences in immigration attitudes between lower Britishness categories and the reference group, reinforcing the role of labour-market stress as a contextual amplifier of identity-based differentiation. Inflation (CPIH) exhibits the strongest and most uniform moderation effect: all brit_cat\*CPIH interactions are positive and precisely estimated, indicating that periods of heightened cost-of-living pressure consistently sharpen attitudinal stratification along the Britishness dimension. GDP per capita also conditions the Britishness gradient, though less uniformly: positive interactions for selected categories (notably categories 2 and 4, with category 5) suggest that macroeconomic prosperity, like economic strain, alters the strength of the relationship between national identification and immigration attitudes, however in a more heterogeneous manner.
+
+Taken together, these results reinforce the macro-level main specifications. National economic conditions, whether reflecting labour-market stress, welfare reliance, inflationary pressure, or aggregate prosperity, do not exert direct, uniform effects on immigration attitudes once period effects are controlled for. Instead, they operate by modulating how strongly national identification structures attitudinal responses, amplifying differences between weakly and strongly identified individuals during periods of heightened economic salience. This conditioning role of macroeconomic context is fully consistent with the micro and meso-level findings.
+
+#### Other forms of Nationalism: Englishness
+
+```{r rob check englishness, include=FALSE, echo=FALSE}
+
+DV_BASE    <- "immigSelf"
+ENG_BASE   <- "englishness"
+TIME_BASE  <- "starttime"
+AGE_BASE   <- "age"
+
+# Macro families
+MACRO_GDP_BASE    <- "gdp_pc"
+MACRO_UNEMP_BASE  <- "unempl_rate"
+MACRO_CLAIM_BASE  <- "claimant_k"
+MACRO_CPIH_BASE   <- "cpih_rate"
+
+# -------------------------
+# Helpers
+# -------------------------
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+zap_if_labelled <- function(x){
+  if (inherits(x, "haven_labelled")) return(zap_labels(x))
+  x
+}
+
+# ======================================================
+# 1) Choose waves where DV + englishness + time exist
+# ======================================================
+w_dv_eng   <- waves_available(df, DV_BASE)
+w_eng      <- waves_available(df, ENG_BASE)
+w_time_eng <- waves_available(df, TIME_BASE)
+
+waves_core_eng <- Reduce(intersect, list(w_dv_eng, w_eng, w_time_eng))
+if(length(waves_core_eng) < 3) stop("Too few overlapping waves across DV, englishness, and starttime.")
+
+# Age overlap (optional)
+w_age_eng <- waves_available(df, AGE_BASE)
+waves_age_eng <- intersect(waves_core_eng, w_age_eng)
+
+# Macro overlap
+w_gdp_eng   <- waves_available(df, MACRO_GDP_BASE)
+w_unemp_eng <- waves_available(df, MACRO_UNEMP_BASE)
+w_claim_eng <- waves_available(df, MACRO_CLAIM_BASE)
+w_cpih_eng  <- waves_available(df, MACRO_CPIH_BASE)
+
+waves_macro_eng <- Reduce(intersect, list(waves_core_eng, w_gdp_eng, w_unemp_eng, w_claim_eng, w_cpih_eng))
+if(length(waves_macro_eng) < 3) stop("Too few overlapping waves across DV/englishness/time and macro series.")
+
+# =========================================
+# 2) Build wide core dataset (dv/engl/time/age)
+# =========================================
+core_cols_eng <- c(
+  paste0(DV_BASE,   "W", waves_macro_eng),
+  paste0(ENG_BASE,  "W", waves_macro_eng),
+  paste0(TIME_BASE, "W", waves_macro_eng),
+  paste0(AGE_BASE,  "W", intersect(waves_macro_eng, w_age_eng))
+)
+
+df_core_eng <- df %>%
+  mutate(across(any_of(core_cols_eng), zap_if_labelled)) %>%
+  select(id, any_of(core_cols_eng))
+
+# =========================================
+# 3) Reshape core to long
+# =========================================
+
+# (A) DV + Englishness
+df_long_core_eng <- df_core_eng %>%
+  pivot_longer(
+    cols = matches(paste0("^(", DV_BASE, "|", ENG_BASE, ")W\\d+$")),
+    names_to = c("var", "wave"),
+    names_pattern = "^(.*)W(\\d+)$",
+    values_to = "value"
+  ) %>%
+  mutate(wave = as.integer(wave)) %>%
+  pivot_wider(names_from = var, values_from = value) %>%
+  rename(
+    dv   = !!DV_BASE,
+    engl = !!ENG_BASE
+  )
+
+# (B) starttime separately
+df_long_time_eng <- df_core_eng %>%
+  pivot_longer(
+    cols = matches(paste0("^", TIME_BASE, "W\\d+$")),
+    names_to = "wave",
+    names_pattern = paste0("^", TIME_BASE, "W(\\d+)$"),
+    values_to = "time"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    time = as.character(time)
+  )
+
+# Merge core + time
+df_long_eng <- df_long_core_eng %>%
+  left_join(df_long_time_eng, by = c("id", "wave"))
+
+# (C) Add age (optional)
+if(length(intersect(waves_macro_eng, w_age_eng)) > 0){
+  age_long_eng <- df_core_eng %>%
+    pivot_longer(
+      cols = matches(paste0("^", AGE_BASE, "W\\d+$")),
+      names_to = "wave",
+      names_pattern = paste0("^", AGE_BASE, "W(\\d+)$"),
+      values_to = "age"
+    ) %>%
+    mutate(wave = as.integer(wave))
+
+  df_long_eng <- df_long_eng %>%
+    left_join(age_long_eng, by = c("id", "wave"))
+}
+
+# Derive year + CLEAN DV/ENGLISHNESS
+df_long_eng <- df_long_eng %>%
+  mutate(
+    time = suppressWarnings(lubridate::ymd_hms(time, quiet = TRUE)),
+    year = lubridate::year(time),
+    dv   = as.numeric(dv),
+    engl = as.numeric(engl),
+    age  = as.numeric(age)
+  ) %>%
+  filter(
+    !is.na(dv),
+    !is.na(engl),
+    engl %in% 1:7,
+    !is.na(wave)
+  )
+
+# ==========================================================
+# 4) Attach macro variables (wide-by-wave -> long, by id×wave)
+# ==========================================================
+macro_long_from_base_eng <- function(df, base, waves_keep){
+  cols <- paste0(base, "W", waves_keep)
+  df %>%
+    select(id, any_of(cols)) %>%
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      names_pattern = paste0("^", base, "W(\\d+)$"),
+      values_to = base
+    ) %>%
+    mutate(wave = as.integer(wave))
+}
+
+macro_gdp_eng   <- macro_long_from_base_eng(df, MACRO_GDP_BASE,   waves_macro_eng)
+macro_unemp_eng <- macro_long_from_base_eng(df, MACRO_UNEMP_BASE, waves_macro_eng)
+macro_claim_eng <- macro_long_from_base_eng(df, MACRO_CLAIM_BASE, waves_macro_eng)
+macro_cpih_eng  <- macro_long_from_base_eng(df, MACRO_CPIH_BASE,  waves_macro_eng)
+
+df_long_eng <- df_long_eng %>%
+  left_join(macro_gdp_eng,   by = c("id", "wave")) %>%
+  left_join(macro_unemp_eng, by = c("id", "wave")) %>%
+  left_join(macro_claim_eng, by = c("id", "wave")) %>%
+  left_join(macro_cpih_eng,  by = c("id", "wave"))
+
+# Fail fast (prevents the “LHS not in data” mystery)
+stopifnot(all(c("dv","engl","wave","id") %in% names(df_long_eng)))
+
+# ======================================
+# 5) Model runner — ENGLISHNESS (macro-consistent: id FE + polynomial time)
+# ======================================
+
+models_gdp_eng <- list(
+  # econ only
+  main_0      = feols(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  # main (engl + econ)
+  main        = feols(dv ~ engl + gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  # econ only + age
+  main_age_0  = feols(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  # main + age
+  main_age    = feols(dv ~ engl + gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  # interaction
+  int         = feols(dv ~ engl * gdp_pc + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  # interaction + age
+  int_age     = feols(dv ~ engl * gdp_pc + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id)
+)
+
+models_unemp_eng <- list(
+  main_0      = feols(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main        = feols(dv ~ engl + unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age_0  = feols(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int         = feols(dv ~ engl * unempl_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * unempl_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id)
+)
+
+models_claim_eng <- list(
+  main_0      = feols(dv ~ claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main        = feols(dv ~ engl + claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age_0  = feols(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int         = feols(dv ~ engl * claimant_k + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * claimant_k + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id)
+)
+
+models_cpih_eng <- list(
+  main_0      = feols(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main        = feols(dv ~ engl + cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age_0  = feols(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  main_age    = feols(dv ~ engl + cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int         = feols(dv ~ engl * cpih_rate + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id),
+
+  int_age     = feols(dv ~ engl * cpih_rate + age + poly(wave, 3, raw = TRUE) | id,
+                      data = df_long_eng, cluster = ~id)
+)
+
+# ======================================
+# 6) Econ rob checks (identity = econ) — ENGLISHNESS
+# (already macro-consistent; keeping as-is)
+# ======================================
+engl_econ_rob_checks <- list(
+  engl_gdp         = feols(engl ~ gdp_pc       + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_unempl_rate = feols(engl ~ unempl_rate  + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_claimant_k  = feols(engl ~ claimant_k   + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id),
+  engl_cpih_rate   = feols(engl ~ cpih_rate    + poly(wave, 3, raw = TRUE) | id,
+                           data = df_long_eng, cluster = ~id)
+)
+```
+
+To assess whether the patterns identified using Britishness are specific to the state-level national identity or instead reflect a more general role of national attachment, we replicate the full set of macro-level models using Englishness as an alternative identity measure. Englishness captures a sub-national, territorially bounded form of identification that is conceptually distinct from Britishness and has been shown to carry different political meanings, particularly in relation to immigration and economic grievances. Re-estimating all specifications with Englishness allows us to evaluate whether economic context conditions immigration attitudes through national identification broadly, or whether these effects depend on the specific institutional and symbolic content of the identity invoked. Methodologically, this exercise follows an identical empirical strategy to the Britishness analyses: Englishness is treated as a continuous variable, cleaned to retain only valid scale values, and entered both as a main effect and in interaction with economic indicators, while controlling for individual and wave fixed effects. This parallel specification ensures that any differences between Britishness and Englishness reflect substantive distinctions in identity content rather than modelling choices, and provides a stringent test of the claim that economic context activates only certain forms of national identification in shaping immigration attitudes.
+
+```{r macro englishness summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+list(
+  gdp_main_noage_engl_econ = models_gdp$main_0,
+  gdp_main_noage_engl = models_gdp$main,
+  gdp_main_age_engl_econ   = models_gdp$main_age_0,
+  gdp_main_age_engl   = models_gdp$main_age,
+  gdp_int_noage_engl  = models_gdp$int,
+  gdp_int_age_engl    = models_gdp$int_age,
+
+  unemp_main_noage_engl_econ = models_unemp$main_0,
+  unemp_main_noage_engl = models_unemp$main,
+  unemp_main_age_engl_econ   = models_unemp$main_age_0,
+  unemp_main_age_engl   = models_unemp$main_age,
+  unemp_int_noage_engl  = models_unemp$int,
+  unemp_int_age_engl    = models_unemp$int_age,
+
+  claimant_main_noage_engl_econ = models_claim$main_0,
+  claimant_main_noage_engl = models_claim$main,
+  claimant_main_age_engl_econ   = models_claim$main_age_0,
+  claimant_main_age_engl   = models_claim$main_age,
+  claimant_int_noage_engl  = models_claim$int,
+  claimant_int_age_engl    = models_claim$int_age,
+
+  cpih_main_noage_engl_econ = models_cpih$main_0,
+  cpih_main_noage_engl = models_cpih$main,
+  cpih_main_age_engl_econ   = models_cpih$main_age_0,
+  cpih_main_age_engl   = models_cpih$main_age,
+  cpih_int_noage_engl  = models_cpih$int,
+  cpih_int_age_engl    = models_cpih$int_age
+) |>
+  lapply(fixest::coeftable)
+
+engl_econ_rob_checks$engl_gdp
+engl_econ_rob_checks$engl_unempl_rate
+engl_econ_rob_checks$engl_claimant_k
+engl_econ_rob_checks$engl_cpih_rate
+
+```
+
+When Englishness is used as the national identification measure, the macro-level GDP models reveal a clear conditioning pattern. In the baseline specifications, Englishness is strongly and negatively associated with immigration attitudes, indicating that increases in English identification are associated with more restrictive immigration positions. As expected in a macro setting with wave fixed effects, GDP per capita does not exhibit a separately identified main effect. However, once the interaction between GDP per capita and Englishness is introduced, the interaction term is negative and statistically significant. This indicates that higher levels of national economic prosperity are associated with a strengthening of the negative association between Englishness and immigration attitudes. Substantively, periods of higher GDP per capita are characterized by a sharper differentiation between weakly and strongly English identifiers in their immigration attitudes. Compared to the corresponding Britishness models, this conditioning pattern is both stronger and more precisely estimated when national identification is measured as Englishness. While Britishness also interacts negatively with GDP per capita, the Britishness interaction is smaller in magnitude and less robust across specifications. In contrast, the Englishness × GDP interaction is consistently statistically significant, suggesting that aggregate prosperity amplifies identity-based differentiation more clearly when identity is defined in sub-national terms. This divergence implies that Englishness is more sensitive than Britishness to macroeconomic prosperity in structuring immigration attitudes, even though both identities exhibit similar baseline associations.
+
+National unemployment, however, does not enter as a main effect once wave fixed effects are included, but it plays a clear conditioning role through interaction with Englishness. The interaction between Englishness and the national unemployment rate is negative and statistically significant across specifications, indicating that higher unemployment strengthens the negative association between English identification and immigration attitudes. In periods of elevated national unemployment, differences in immigration attitudes between weakly and strongly English identifiers become more pronounced, even though unemployment itself does not uniformly shift attitudes across respondents. Relative to the Britishness models, the unemployment-based moderation is again more sharply identified when Englishness is used. The Britishness × unemployment interaction is negative and significant, but the Englishness interaction is larger in magnitude and estimated with greater precision. This suggests that national labour-market stress more strongly conditions the attitudinal relevance of Englishness than Britishness. While both identities become more politically salient under adverse macroeconomic conditions, Englishness appears to function as the more reactive identity dimension in periods of heightened national unemployment.
+
+The claimant count results using Englishness closely parallel those for unemployment but are even more pronounced. In baseline specifications, Englishness is strongly and negatively associated with immigration attitudes, while claimant levels do not exhibit a separately identified main effect due to wave fixed effects. Once interactions are introduced, the Englishness × claimant count interaction is negative, precisely estimated, and highly statistically significant. This indicates that increases in national welfare dependency are associated with a stronger negative association between Englishness and immigration attitudes, amplifying identity-based attitudinal differentiation during periods of elevated claimant reliance. Compared to Britishness, the claimant-based moderation is substantially stronger for Englishness. While the Britishness × claimant interaction is negative and statistically significant, its magnitude is notably smaller. The Englishness interaction, by contrast, is both larger and more precisely estimated, indicating that welfare-related macroeconomic stress is more tightly linked to sub-national English identification than to state-level Britishness. This reinforces the interpretation that Englishness is particularly responsive to macroeconomic contexts that emphasize welfare competition and labour-market exclusion.
+
+Finally, the CPIH models reveal the strongest and most consistent macro-level moderation effects when Englishness is used as the identity measure. In baseline models, Englishness remains strongly negatively associated with immigration attitudes, while inflation does not exhibit a separately identified main effect. Once interacted with Englishness, CPIH shows a large, negative, and highly statistically significant interaction across all specifications. This indicates that rising cost-of-living pressures substantially strengthen the negative association between English identification and immigration attitudes, sharpening attitudinal stratification along the Englishness dimension during periods of elevated inflation. In comparison, while Britishness also interacts negatively with CPIH, the Englishness-based interaction is markedly stronger. The magnitude of the CPIH × Englishness coefficient exceeds that of the CPIH × Britishness interaction, and its precision is higher across all specifications. This suggests that cost-of-living pressures are particularly effective at activating Englishness as a politically consequential identity. Among all macro indicators examined, inflation appears to most clearly differentiate Englishness from Britishness, underscoring the heightened sensitivity of English identification to broad economic strain that is experienced as directly affecting household welfare.
+
+Taken together, the micro, meso, and macro-level analyses reveal a clear and internally consistent pattern regarding the political role of national identity, while also highlighting a systematic divergence between Britishness and Englishness. At the micro level, Britishness exhibits a small but statistically precise within-individual association with immigration attitudes, characterised by pronounced temporal heterogeneity and episodic salience tied to political context, however, this relationship is consistently *not* conditioned by individual economic resources or perceived economic risk. Englishness, by contrast, plays a more limited role at the micro level, reflecting its narrower and less universally mobilised character in everyday identity change. Moving to the meso level, this asymmetry becomes more pronounced: local economic conditions, e.g., unemployment, claimant counts, and local earnings, do not meaningfully moderate the effect of Britishness, but they interact systematically with Englishness, amplifying its association with immigration attitudes in economically adverse contexts. This pattern persists and strengthens at the macro level. National economic indicators, including GDP per capita, unemployment, claimant counts, and inflation (CPIH), consistently condition the relationship between Englishness and immigration attitudes, while analogous Britishness models show weaker, less stable, or null moderation effects. Across all three levels of analysis, Britishness emerges as a broadly shared, context-sensitive identity whose attitudinal relevance fluctuates with political salience but remains largely decoupled from economic structure. Englishness, in contrast, appears as a more economically embedded and politically charged identity dimension, whose explanatory power is activated precisely where economic context becomes salient. The cumulative evidence therefore suggests that the political economy of immigration attitudes operates less through national identity *per se* than through the specific *content* of that identity: Englishness functions as a context-reactive, economically inflected identity, whereas Britishness operates as a more general, symbolically elastic national frame. This distinction would be obscured in single-level or Britishness-only analyses and underscores the value of the multi-level design adopted in this study.
+
+### Description of macro variables {#macro-vars}
+
+The macro-level indicators used in the analysis capture objective national economic conditions in the United Kingdom. All macro variables are derived from official Office for National Statistics (ONS) sources and are merged to the British Election Study (BES) panel using fieldwork year, before being reshaped to align with the wave-based structure of the survey. The macro indicators are intended to proxy distinct dimensions of the national economic environment that may condition the relationship between national identification and attitudes toward immigration.
+
+**National unemployment rate.**
+
+The national unemployment rate measures the share of the economically active population that is unemployed, based on ONS labour market statistics. The underlying data are available at quarterly frequency. For each BES wave, quarterly unemployment figures are collapsed to the relevant fieldwork year by taking the annual mean. This variable captures aggregate labour market conditions and serves as a core indicator of nationwide economic insecurity and employment-related stress.
+
+**Claimant count.**
+
+The claimant count variable measures the number of individuals claiming unemployment-related benefits at the national level, including Jobseeker’s Allowance and the unemployment-related component of Universal Credit. The data are drawn from ONS claimant count statistics and are available at quarterly frequency in the period covered by the BES panel. Quarterly observations are aggregated to annual means to match the fieldwork year of each BES wave. Compared to the unemployment rate, claimant count reflects a more administrative and welfare-based dimension of labour market strain, closely tied to benefit dependency and the visibility of economic hardship at the national level.
+
+**GDP per capita.**
+
+GDP per capita is measured using national accounts data from the ONS and captures aggregate economic output per person in the United Kingdom. The series is available at quarterly frequency and is collapsed to annual means corresponding to each BES fieldwork year. GDP per capita proxies overall national economic performance and prosperity, rather than labour market insecurity per se, and provides a broad indicator of the macroeconomic environment within which political attitudes are formed.
+
+**Inflation (CPIH).**
+
+Inflation is measured using the CPIH index, which captures changes in consumer prices including owner occupiers’ housing costs. CPIH data are obtained from ONS price statistics and are available at quarterly frequency. Quarterly values are aggregated to annual means to align with BES fieldwork years. CPIH serves as an indicator of cost-of-living pressures and purchasing power erosion, reflecting a distinct dimension of macroeconomic strain that is not directly captured by labour market indicators.
+
