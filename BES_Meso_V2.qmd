@@ -569,3 +569,92 @@ The claimant count variable measures the mean number of benefit claimants in eac
 **Local income (ASHE).**
 
 Local income is measured using median weekly gross pay from the Annual Survey of Hours and Earnings (ASHE), residence-based and covering all working patterns and sexes. The variable captures the typical earnings level of residents within each constituency and is merged to the BES panel by constituency and year. Unlike unemployment and claimant indicators, this income measure reflects general economic prosperity rather than labour market risk or insecurity, and varies more slowly over time at the constituency level.
+
+```{r save models, include=FALSE, echo=FALSE}
+# ==========================================================
+# SAVE MESO MODELS (micro-style: one flat named list)
+# ==========================================================
+
+models_meso <- list(
+
+  # -------------------------
+  # Britishness (continuous)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_only_noage_meso = m_u0.1,
+  unemp_brit_noage_meso = m_u1,
+  unemp_only_age_meso   = m_u0.2,
+  unemp_brit_age_meso   = m_u2,
+  unemp_int_noage_meso  = m_u3,
+  unemp_int_age_meso    = m_u4,
+
+  # Claimant count
+  claimant_only_noage_meso = m_c0.1,
+  claimant_brit_noage_meso = m_c1,
+  claimant_only_age_meso   = m_c0.2,
+  claimant_brit_age_meso   = m_c2,
+  claimant_int_noage_meso  = m_c3,
+  claimant_int_age_meso    = m_c4,
+
+  # Local income (ASHE)
+  income_only_noage_meso = m_i0.1,
+  income_brit_noage_meso = m_i1,
+  income_only_age_meso   = m_i0.2,
+  income_brit_age_meso   = m_i2,
+  income_int_noage_meso  = m_i3,
+  income_int_age_meso    = m_i4,
+
+  # -------------------------
+  # Britishness (categorical)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_britcat_noage_meso = m_u1_cat,
+  unemp_britcat_age_meso   = m_u2_cat,
+  unemp_britcat_int_noage_meso = m_u3_cat,
+  unemp_britcat_int_age_meso   = m_u4_cat,
+
+  # Claimant count
+  claimant_britcat_noage_meso = m_c1_cat,
+  claimant_britcat_age_meso   = m_c2_cat,
+  claimant_britcat_int_noage_meso = m_c3_cat,
+  claimant_britcat_int_age_meso   = m_c4_cat,
+
+  # Local income (ASHE)
+  income_britcat_noage_meso = m_i1_cat,
+  income_britcat_age_meso   = m_i2_cat,
+  income_britcat_int_noage_meso = m_i3_cat,
+  income_britcat_int_age_meso   = m_i4_cat,
+
+  # -------------------------
+  # Englishness (continuous)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_only_noage_eng_meso = m_u0.1_eng,
+  unemp_engl_noage_meso     = m_u1_eng,
+  unemp_only_age_eng_meso   = m_u0.2_eng,
+  unemp_engl_age_meso       = m_u2_eng,
+  unemp_int_noage_eng_meso  = m_u3_eng,
+  unemp_int_age_eng_meso    = m_u4_eng,
+
+  # Claimant count
+  claimant_only_noage_eng_meso = m_c0.1_eng,
+  claimant_engl_noage_meso     = m_c1_eng,
+  claimant_only_age_eng_meso   = m_c0.2_eng,
+  claimant_engl_age_meso       = m_c2_eng,
+  claimant_int_noage_eng_meso  = m_c3_eng,
+  claimant_int_age_eng_meso    = m_c4_eng,
+
+  # Local income (ASHE)
+  income_only_noage_eng_meso = m_i0.1_eng,
+  income_engl_noage_meso     = m_i1_eng,
+  income_only_age_eng_meso   = m_i0.2_eng,
+  income_engl_age_meso       = m_i2_eng,
+  income_int_noage_eng_meso  = m_i3_eng,
+  income_int_age_eng_meso    = m_i4_eng
+)
+
+saveRDS(models_meso, "models_meso_all.rds")
+```

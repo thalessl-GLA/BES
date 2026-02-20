@@ -778,3 +778,153 @@ GDP per capita is measured using national accounts data from the ONS and capture
 **Inflation (CPIH).**
 
 Inflation is measured using the CPIH index, which captures changes in consumer prices including owner occupiers’ housing costs. CPIH data are obtained from ONS price statistics and are available at quarterly frequency. Quarterly values are aggregated to annual means to align with BES fieldwork years. CPIH serves as an indicator of cost-of-living pressures and purchasing power erosion, reflecting a distinct dimension of macroeconomic strain that is not directly captured by labour market indicators.
+
+```{r save models, echo=FALSE, include=FALSE}
+
+# ============================================================
+# 7) RENAME + SAVE ALL MACRO MODELS (LIKE MICRO & MESO)
+# ============================================================
+
+# --------------------------
+# A) Britishness – Continuous
+# --------------------------
+
+macro_brit_continuous <- list(
+
+  # GDP
+  gdp_main_noage_econ_macro   = models_gdp$main_0,
+  gdp_main_noage_macro        = models_gdp$main,
+  gdp_main_age_econ_macro     = models_gdp$main_age_0,
+  gdp_main_age_macro          = models_gdp$main_age,
+  gdp_int_noage_macro         = models_gdp$int,
+  gdp_int_age_macro           = models_gdp$int_age,
+
+  # Unemployment
+  unemp_main_noage_econ_macro = models_unemp$main_0,
+  unemp_main_noage_macro      = models_unemp$main,
+  unemp_main_age_econ_macro   = models_unemp$main_age_0,
+  unemp_main_age_macro        = models_unemp$main_age,
+  unemp_int_noage_macro       = models_unemp$int,
+  unemp_int_age_macro         = models_unemp$int_age,
+
+  # Claimant
+  claimant_main_noage_econ_macro = models_claim$main_0,
+  claimant_main_noage_macro      = models_claim$main,
+  claimant_main_age_econ_macro   = models_claim$main_age_0,
+  claimant_main_age_macro        = models_claim$main_age,
+  claimant_int_noage_macro       = models_claim$int,
+  claimant_int_age_macro         = models_claim$int_age,
+
+  # CPIH
+  cpih_main_noage_econ_macro  = models_cpih$main_0,
+  cpih_main_noage_macro       = models_cpih$main,
+  cpih_main_age_econ_macro    = models_cpih$main_age_0,
+  cpih_main_age_macro         = models_cpih$main_age,
+  cpih_int_noage_macro        = models_cpih$int,
+  cpih_int_age_macro          = models_cpih$int_age
+)
+
+# --------------------------
+# B) Britishness – Categorical
+# --------------------------
+
+macro_brit_categorical <- list(
+
+  gdp_main_noage_cat_macro    = models_gdp_cat$main,
+  gdp_main_age_cat_macro      = models_gdp_cat$main_age,
+  gdp_int_noage_cat_macro     = models_gdp_cat$int,
+  gdp_int_age_cat_macro       = models_gdp_cat$int_age,
+
+  unemp_main_noage_cat_macro  = models_unemp_cat$main,
+  unemp_main_age_cat_macro    = models_unemp_cat$main_age,
+  unemp_int_noage_cat_macro   = models_unemp_cat$int,
+  unemp_int_age_cat_macro     = models_unemp_cat$int_age,
+
+  claimant_main_noage_cat_macro = models_claim_cat$main,
+  claimant_main_age_cat_macro   = models_claim_cat$main_age,
+  claimant_int_noage_cat_macro  = models_claim_cat$int,
+  claimant_int_age_cat_macro    = models_claim_cat$int_age,
+
+  cpih_main_noage_cat_macro   = models_cpih_cat$main,
+  cpih_main_age_cat_macro     = models_cpih_cat$main_age,
+  cpih_int_noage_cat_macro    = models_cpih_cat$int,
+  cpih_int_age_cat_macro      = models_cpih_cat$int_age
+)
+
+# --------------------------
+# C) Englishness – Continuous
+# --------------------------
+
+macro_engl_continuous <- list(
+
+  # GDP
+  gdp_main_noage_engl_macro   = models_gdp_eng$main_0,
+  gdp_main_noage_engl_macro   = models_gdp_eng$main,
+  gdp_main_age_engl_macro     = models_gdp_eng$main_age,
+  gdp_int_noage_engl_macro    = models_gdp_eng$int,
+  gdp_int_age_engl_macro      = models_gdp_eng$int_age,
+
+  # Unemployment
+  unemp_main_noage_engl_macro = models_unemp_eng$main_0,
+  unemp_main_noage_engl_macro = models_unemp_eng$main,
+  unemp_main_age_engl_macro   = models_unemp_eng$main_age,
+  unemp_int_noage_engl_macro  = models_unemp_eng$int,
+  unemp_int_age_engl_macro    = models_unemp_eng$int_age,
+
+  # Claimant
+  claimant_main_noage_engl_macro = models_claim_eng$main_0,
+  claimant_main_noage_engl_macro = models_claim_eng$main,
+  claimant_main_age_engl_macro   = models_claim_eng$main_age,
+  claimant_int_noage_engl_macro  = models_claim_eng$int,
+  claimant_int_age_engl_macro    = models_claim_eng$int_age,
+
+  # CPIH
+  cpih_main_noage_engl_macro  = models_cpih_eng$main_0,
+  cpih_main_noage_engl_macro  = models_cpih_eng$main,
+  cpih_main_age_engl_macro    = models_cpih_eng$main_age,
+  cpih_int_noage_engl_macro   = models_cpih_eng$int,
+  cpih_int_age_engl_macro     = models_cpih_eng$int_age
+)
+
+# --------------------------
+# D) Economic Identity Robustness
+# --------------------------
+
+macro_identity_robustness <- list(
+
+  brit_gdp_macro          = brit_econ_rob_checks$brit_gdp,
+  brit_unempl_macro       = brit_econ_rob_checks$brit_unempl_rate,
+  brit_claimant_macro     = brit_econ_rob_checks$brit_claimant_k,
+  brit_cpih_macro         = brit_econ_rob_checks$brit_cpih_rate,
+
+  engl_gdp_macro          = engl_econ_rob_checks$engl_gdp,
+  engl_unempl_macro       = engl_econ_rob_checks$engl_unempl_rate,
+  engl_claimant_macro     = engl_econ_rob_checks$engl_claimant_k,
+  engl_cpih_macro         = engl_econ_rob_checks$engl_cpih_rate
+)
+
+# ============================================================
+# 8) SAVE EVERYTHING (SAFE VERSION)
+# ============================================================
+
+macro_all_models <- c(
+  macro_brit_continuous,
+  macro_brit_categorical,
+  macro_engl_continuous,
+  macro_identity_robustness
+)
+
+# Define path
+save_path <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/models"
+
+# Create directory if it doesn't exist
+if (!dir.exists(save_path)) {
+  dir.create(save_path, recursive = TRUE)
+}
+
+# Save
+saveRDS(
+  macro_all_models,
+  file.path(save_path, "macro_models_all.rds")
+)
+```
