@@ -554,6 +554,108 @@ In contrast to unemployment and claimant indicators, the Englishness specificati
 
 Taken together, the micro and meso-level analyses reveal a clear and theoretically consequential division between identity, individual economics, and contextual economic conditions. At the micro level, both Britishness and Englishness display robust within-individual associations with immigration attitudes, but individual economic resources and perceived insecurity do not meaningfully mediate or condition these effects. National identity shifts matter, yet they do so largely independently of changes in respondents’ personal economic circumstances. At the meso level, however, the picture changes. Objective local economic conditions do not simply exert direct effects on immigration attitudes, instead, they condition the political relevance of identity itself. This contextual activation is weak and inconsistent when identity is measured as Britishness, but becomes systematic and substantively meaningful when identity is measured as Englishness. Englishness emerges as the identity dimension through which local economic stress is translated into attitudinal change, while Britishness appears comparatively insulated from local economic variation. The combined evidence therefore supports a central claim of the paper that economic context shapes immigration attitudes primarily by activating politicised forms of national identity, rather than by altering individual material incentives, and this activation operates more powerfully through sub-national English identity than through broader state-centred Britishness.
 
+```{r robs check engl cat, include=FALSE, echo=FALSE}
+# ==========================================================
+# MAIN MESO MODELS (robustness): Englishness categorical (ref = 7)
+# id FE + wave FE, clustered by id
+# ==========================================================
+# Justification:
+# Functional-form check parallel to Britishness categorical models:
+# replace linear Englishness with a full set of Englishness categories,
+# using 7 ("very strongly English") as the reference group. All else identical.
+# ==========================================================
+
+# Optional: enforce valid 1..7 values (drops any DK/PNTA miscoding if present)
+panel_meso_eng_cat <- panel_meso_eng %>%
+  mutate(
+    engl = as.numeric(if(inherits(engl, "haven_labelled")) haven::zap_labels(engl) else engl),
+    age  = as.numeric(if(inherits(age,  "haven_labelled")) haven::zap_labels(age)  else age),
+    dv   = as.numeric(if(inherits(dv,   "haven_labelled")) haven::zap_labels(dv)   else dv)
+  ) %>%
+  # you already clean engl in panel_long_eng, but keep this guardrail
+  mutate(engl = dplyr::na_if(engl, 9999)) %>%
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave))
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(unemp_rate_mean))
+
+m_u1_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + unemp_rate_mean | id + wave,
+  data = panel_u_eng_cat, cluster = "id"
+)
+m_u2_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + unemp_rate_mean + age | id + wave,
+  data = panel_u_eng_cat, cluster = "id"
+)
+m_u3_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * unemp_rate_mean | id + wave,
+  data = panel_u_eng_cat, cluster = "id"
+)
+m_u4_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * unemp_rate_mean + age | id + wave,
+  data = panel_u_eng_cat, cluster = "id"
+)
+
+# ---------- CLAIMANT COUNT ----------
+panel_c_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(claimant_mean))
+
+m_c1_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + claimant_mean | id + wave,
+  data = panel_c_eng_cat, cluster = "id"
+)
+m_c2_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + claimant_mean + age | id + wave,
+  data = panel_c_eng_cat, cluster = "id"
+)
+m_c3_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * claimant_mean | id + wave,
+  data = panel_c_eng_cat, cluster = "id"
+)
+m_c4_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * claimant_mean + age | id + wave,
+  data = panel_c_eng_cat, cluster = "id"
+)
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(income_meso))
+
+m_i1_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + income_meso | id + wave,
+  data = panel_i_eng_cat, cluster = "id"
+)
+m_i2_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) + income_meso + age | id + wave,
+  data = panel_i_eng_cat, cluster = "id"
+)
+m_i3_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * income_meso | id + wave,
+  data = panel_i_eng_cat, cluster = "id"
+)
+m_i4_eng_cat <- feols(
+  dv ~ i(engl, ref = 7) * income_meso + age | id + wave,
+  data = panel_i_eng_cat, cluster = "id"
+)
+```
+
+```{r meso_engl_cat_models_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+
+list(
+  unemp_main_noage_eng_cat = m_u1_eng_cat,
+  unemp_main_age_eng_cat   = m_u2_eng_cat,
+  unemp_int_noage_eng_cat  = m_u3_eng_cat,
+  unemp_int_age_eng_cat    = m_u4_eng_cat,
+  claimant_main_noage_eng_cat = m_c1_eng_cat,
+  claimant_main_age_eng_cat   = m_c2_eng_cat,
+  claimant_int_noage_eng_cat  = m_c3_eng_cat,
+  claimant_int_age_eng_cat    = m_c4_eng_cat,
+  income_main_noage_eng_cat = m_i1_eng_cat,
+  income_main_age_eng_cat   = m_i2_eng_cat,
+  income_int_noage_eng_cat  = m_i3_eng_cat,
+  income_int_age_eng_cat    = m_i4_eng_cat
+) |> lapply(\(m) fixest::coeftable(m))
+
+```
+
 ### Description of meso variables {#meso-vars}
 
 The meso-level indicators used in the analysis capture objective local economic conditions at the level of UK parliamentary constituencies. All meso variables are derived from official Office for National Statistics (ONS) sources, merged to the BES panel using constituency code × fieldwork year, and then reshaped to match the wave-based structure of the survey. They are intended to proxy different dimensions of local economic context that may shape attitudes toward immigration.
@@ -646,6 +748,7 @@ models_meso <- list(
   claimant_engl_age_meso       = m_c2_eng,
   claimant_int_noage_eng_meso  = m_c3_eng,
   claimant_int_age_eng_meso    = m_c4_eng,
+  
 
   # Local income (ASHE)
   income_only_noage_eng_meso = m_i0.1_eng,
@@ -653,7 +756,22 @@ models_meso <- list(
   income_only_age_eng_meso   = m_i0.2_eng,
   income_engl_age_meso       = m_i2_eng,
   income_int_noage_eng_meso  = m_i3_eng,
-  income_int_age_eng_meso    = m_i4_eng
+  income_int_age_eng_meso    = m_i4_eng,
+  
+  # English Categorical
+  
+  unemp_main_noage_eng_cat = m_u1_eng_cat,
+  unemp_main_age_eng_cat   = m_u2_eng_cat,
+  unemp_int_noage_eng_cat  = m_u3_eng_cat,
+  unemp_int_age_eng_cat    = m_u4_eng_cat,
+  claimant_main_noage_eng_cat = m_c1_eng_cat,
+  claimant_main_age_eng_cat   = m_c2_eng_cat,
+  claimant_int_noage_eng_cat  = m_c3_eng_cat,
+  claimant_int_age_eng_cat    = m_c4_eng_cat,
+  income_main_noage_eng_cat = m_i1_eng_cat,
+  income_main_age_eng_cat   = m_i2_eng_cat,
+  income_int_noage_eng_cat  = m_i3_eng_cat,
+  income_int_age_eng_cat    = m_i4_eng_cat
 )
 
 saveRDS(models_meso, "models_meso_all.rds")
