@@ -705,48 +705,114 @@ engl_econ_rob_checks <- list(
   engl_cpih_rate   = feols(engl ~ cpih_rate    + poly(wave, 3, raw = TRUE) | id,
                            data = df_long_eng, cluster = ~id)
 )
+
+# ============================================================
+# Macro robustness: Englishness as categorical (ref = 7)
+# ============================================================
+
+# 0) Ensure numeric + build categorical with 7 as reference
+# Justification: makes the categorical specification directly comparable
+# across micro/meso/macro (same base category = "most English").
+df_long_eng <- df_long_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = factor(engl_num, levels = 1:7) %>% relevel(ref = "7")
+  )
+
+# 1) Helper: run same 4-model structure with engl_cat
+run_macro_cat_engl <- function(varname){
+
+  f_main     <- as.formula(paste0("dv ~ engl_cat + ", varname, " | id + wave"))
+  f_main_age <- as.formula(paste0("dv ~ engl_cat + ", varname, " + age | id + wave"))
+  f_int      <- as.formula(paste0("dv ~ engl_cat * ", varname, " | id + wave"))
+  f_int_age  <- as.formula(paste0("dv ~ engl_cat * ", varname, " + age | id + wave"))
+
+  list(
+    main     = feols(f_main,     data = df_long_eng, cluster = ~id),
+    main_age = feols(f_main_age, data = df_long_eng, cluster = ~id),
+    int      = feols(f_int,      data = df_long_eng, cluster = ~id),
+    int_age  = feols(f_int_age,  data = df_long_eng, cluster = ~id)
+  )
+}
+
+# 2) Run categorical versions for each macro indicator
+models_gdp_eng_cat   <- run_macro_cat_engl("gdp_pc")
+models_unemp_eng_cat <- run_macro_cat_engl("unempl_rate")
+models_claim_eng_cat <- run_macro_cat_engl("claimant_k")
+models_cpih_eng_cat  <- run_macro_cat_engl("cpih_rate")
 ```
 
 To assess whether the patterns identified using Britishness are specific to the state-level national identity or instead reflect a more general role of national attachment, we replicate the full set of macro-level models using Englishness as an alternative identity measure. Englishness captures a sub-national, territorially bounded form of identification that is conceptually distinct from Britishness and has been shown to carry different political meanings, particularly in relation to immigration and economic grievances. Re-estimating all specifications with Englishness allows us to evaluate whether economic context conditions immigration attitudes through national identification broadly, or whether these effects depend on the specific institutional and symbolic content of the identity invoked. Methodologically, this exercise follows an identical empirical strategy to the Britishness analyses: Englishness is treated as a continuous variable, cleaned to retain only valid scale values, and entered both as a main effect and in interaction with economic indicators, while controlling for individual and wave fixed effects. This parallel specification ensures that any differences between Britishness and Englishness reflect substantive distinctions in identity content rather than modelling choices, and provides a stringent test of the claim that economic context activates only certain forms of national identification in shaping immigration attitudes.
 
-```{r macro englishness summaries, echo=FALSE, warning=FALSE, message=FALSE}
+```{r macro_englishness_summaries, echo=FALSE, warning=FALSE, message=FALSE}
 
 list(
-  gdp_main_noage_engl_econ = models_gdp$main_0,
-  gdp_main_noage_engl = models_gdp$main,
-  gdp_main_age_engl_econ   = models_gdp$main_age_0,
-  gdp_main_age_engl   = models_gdp$main_age,
-  gdp_int_noage_engl  = models_gdp$int,
-  gdp_int_age_engl    = models_gdp$int_age,
+  # -------------------------
+  # ENGLISHNESS — Continuous
+  # -------------------------
 
-  unemp_main_noage_engl_econ = models_unemp$main_0,
-  unemp_main_noage_engl = models_unemp$main,
-  unemp_main_age_engl_econ   = models_unemp$main_age_0,
-  unemp_main_age_engl   = models_unemp$main_age,
-  unemp_int_noage_engl  = models_unemp$int,
-  unemp_int_age_engl    = models_unemp$int_age,
+  gdp_main_noage_engl_econ = models_gdp_eng$main_0,
+  gdp_main_noage_engl      = models_gdp_eng$main,
+  gdp_main_age_engl_econ   = models_gdp_eng$main_age_0,
+  gdp_main_age_engl        = models_gdp_eng$main_age,
+  gdp_int_noage_engl       = models_gdp_eng$int,
+  gdp_int_age_engl         = models_gdp_eng$int_age,
 
-  claimant_main_noage_engl_econ = models_claim$main_0,
-  claimant_main_noage_engl = models_claim$main,
-  claimant_main_age_engl_econ   = models_claim$main_age_0,
-  claimant_main_age_engl   = models_claim$main_age,
-  claimant_int_noage_engl  = models_claim$int,
-  claimant_int_age_engl    = models_claim$int_age,
+  unemp_main_noage_engl_econ = models_unemp_eng$main_0,
+  unemp_main_noage_engl      = models_unemp_eng$main,
+  unemp_main_age_engl_econ   = models_unemp_eng$main_age_0,
+  unemp_main_age_engl        = models_unemp_eng$main_age,
+  unemp_int_noage_engl       = models_unemp_eng$int,
+  unemp_int_age_engl         = models_unemp_eng$int_age,
 
-  cpih_main_noage_engl_econ = models_cpih$main_0,
-  cpih_main_noage_engl = models_cpih$main,
-  cpih_main_age_engl_econ   = models_cpih$main_age_0,
-  cpih_main_age_engl   = models_cpih$main_age,
-  cpih_int_noage_engl  = models_cpih$int,
-  cpih_int_age_engl    = models_cpih$int_age
+  claimant_main_noage_engl_econ = models_claim_eng$main_0,
+  claimant_main_noage_engl      = models_claim_eng$main,
+  claimant_main_age_engl_econ   = models_claim_eng$main_age_0,
+  claimant_main_age_engl        = models_claim_eng$main_age,
+  claimant_int_noage_engl       = models_claim_eng$int,
+  claimant_int_age_engl         = models_claim_eng$int_age,
+
+  cpih_main_noage_engl_econ = models_cpih_eng$main_0,
+  cpih_main_noage_engl      = models_cpih_eng$main,
+  cpih_main_age_engl_econ   = models_cpih_eng$main_age_0,
+  cpih_main_age_engl        = models_cpih_eng$main_age,
+  cpih_int_noage_engl       = models_cpih_eng$int,
+  cpih_int_age_engl         = models_cpih_eng$int_age,
+
+  # -------------------------
+  # ENGLISHNESS — Categorical (ref = 7)
+  # -------------------------
+
+  gdp_main_noage_engl_cat   = models_gdp_eng_cat$main,
+  gdp_main_age_engl_cat     = models_gdp_eng_cat$main_age,
+  gdp_int_noage_engl_cat    = models_gdp_eng_cat$int,
+  gdp_int_age_engl_cat      = models_gdp_eng_cat$int_age,
+
+  unemp_main_noage_engl_cat = models_unemp_eng_cat$main,
+  unemp_main_age_engl_cat   = models_unemp_eng_cat$main_age,
+  unemp_int_noage_engl_cat  = models_unemp_eng_cat$int,
+  unemp_int_age_engl_cat    = models_unemp_eng_cat$int_age,
+
+  claimant_main_noage_engl_cat = models_claim_eng_cat$main,
+  claimant_main_age_engl_cat   = models_claim_eng_cat$main_age,
+  claimant_int_noage_engl_cat  = models_claim_eng_cat$int,
+  claimant_int_age_engl_cat    = models_claim_eng_cat$int_age,
+
+  cpih_main_noage_engl_cat  = models_cpih_eng_cat$main,
+  cpih_main_age_engl_cat    = models_cpih_eng_cat$main_age,
+  cpih_int_noage_engl_cat   = models_cpih_eng_cat$int,
+  cpih_int_age_engl_cat     = models_cpih_eng_cat$int_age
+
 ) |>
   lapply(fixest::coeftable)
 
+# ---------------------------------------
+# Identity = econ robustness (Englishness)
+# ---------------------------------------
 engl_econ_rob_checks$engl_gdp
 engl_econ_rob_checks$engl_unempl_rate
 engl_econ_rob_checks$engl_claimant_k
 engl_econ_rob_checks$engl_cpih_rate
-
 ```
 
 When Englishness is used as the national identification measure, the macro-level GDP models reveal a clear conditioning pattern. In the baseline specifications, Englishness is strongly and negatively associated with immigration attitudes, indicating that increases in English identification are associated with more restrictive immigration positions. As expected in a macro setting with wave fixed effects, GDP per capita does not exhibit a separately identified main effect. However, once the interaction between GDP per capita and Englishness is introduced, the interaction term is negative and statistically significant. This indicates that higher levels of national economic prosperity are associated with a strengthening of the negative association between Englishness and immigration attitudes. Substantively, periods of higher GDP per capita are characterized by a sharper differentiation between weakly and strongly English identifiers in their immigration attitudes. Compared to the corresponding Britishness models, this conditioning pattern is both stronger and more precisely estimated when national identification is measured as Englishness. While Britishness also interacts negatively with GDP per capita, the Britishness interaction is smaller in magnitude and less robust across specifications. In contrast, the Englishness × GDP interaction is consistently statistically significant, suggesting that aggregate prosperity amplifies identity-based differentiation more clearly when identity is defined in sub-national terms. This divergence implies that Englishness is more sensitive than Britishness to macroeconomic prosperity in structuring immigration attitudes, even though both identities exhibit similar baseline associations.
@@ -779,7 +845,7 @@ GDP per capita is measured using national accounts data from the ONS and capture
 
 Inflation is measured using the CPIH index, which captures changes in consumer prices including owner occupiers’ housing costs. CPIH data are obtained from ONS price statistics and are available at quarterly frequency. Quarterly values are aggregated to annual means to align with BES fieldwork years. CPIH serves as an indicator of cost-of-living pressures and purchasing power erosion, reflecting a distinct dimension of macroeconomic strain that is not directly captured by labour market indicators.
 
-```{r save models, echo=FALSE, include=FALSE}
+```{r save_models, echo=FALSE, include=FALSE}
 
 # ============================================================
 # 7) RENAME + SAVE ALL MACRO MODELS (LIKE MICRO & MESO)
@@ -788,7 +854,6 @@ Inflation is measured using the CPIH index, which captures changes in consumer p
 # --------------------------
 # A) Britishness – Continuous
 # --------------------------
-
 macro_brit_continuous <- list(
 
   # GDP
@@ -827,7 +892,6 @@ macro_brit_continuous <- list(
 # --------------------------
 # B) Britishness – Categorical
 # --------------------------
-
 macro_brit_categorical <- list(
 
   gdp_main_noage_cat_macro    = models_gdp_cat$main,
@@ -854,42 +918,70 @@ macro_brit_categorical <- list(
 # --------------------------
 # C) Englishness – Continuous
 # --------------------------
-
 macro_engl_continuous <- list(
 
   # GDP
-  gdp_main_noage_engl_macro   = models_gdp_eng$main_0,
-  gdp_main_noage_engl_macro   = models_gdp_eng$main,
-  gdp_main_age_engl_macro     = models_gdp_eng$main_age,
-  gdp_int_noage_engl_macro    = models_gdp_eng$int,
-  gdp_int_age_engl_macro      = models_gdp_eng$int_age,
+  gdp_main_noage_engl_econ_macro = models_gdp_eng$main_0,
+  gdp_main_noage_engl_macro      = models_gdp_eng$main,
+  gdp_main_age_engl_econ_macro   = models_gdp_eng$main_age_0,
+  gdp_main_age_engl_macro        = models_gdp_eng$main_age,
+  gdp_int_noage_engl_macro       = models_gdp_eng$int,
+  gdp_int_age_engl_macro         = models_gdp_eng$int_age,
 
   # Unemployment
-  unemp_main_noage_engl_macro = models_unemp_eng$main_0,
-  unemp_main_noage_engl_macro = models_unemp_eng$main,
-  unemp_main_age_engl_macro   = models_unemp_eng$main_age,
-  unemp_int_noage_engl_macro  = models_unemp_eng$int,
-  unemp_int_age_engl_macro    = models_unemp_eng$int_age,
+  unemp_main_noage_engl_econ_macro = models_unemp_eng$main_0,
+  unemp_main_noage_engl_macro      = models_unemp_eng$main,
+  unemp_main_age_engl_econ_macro   = models_unemp_eng$main_age_0,
+  unemp_main_age_engl_macro        = models_unemp_eng$main_age,
+  unemp_int_noage_engl_macro       = models_unemp_eng$int,
+  unemp_int_age_engl_macro         = models_unemp_eng$int_age,
 
   # Claimant
-  claimant_main_noage_engl_macro = models_claim_eng$main_0,
-  claimant_main_noage_engl_macro = models_claim_eng$main,
-  claimant_main_age_engl_macro   = models_claim_eng$main_age,
-  claimant_int_noage_engl_macro  = models_claim_eng$int,
-  claimant_int_age_engl_macro    = models_claim_eng$int_age,
+  claimant_main_noage_engl_econ_macro = models_claim_eng$main_0,
+  claimant_main_noage_engl_macro      = models_claim_eng$main,
+  claimant_main_age_engl_econ_macro   = models_claim_eng$main_age_0,
+  claimant_main_age_engl_macro        = models_claim_eng$main_age,
+  claimant_int_noage_engl_macro       = models_claim_eng$int,
+  claimant_int_age_engl_macro         = models_claim_eng$int_age,
 
   # CPIH
-  cpih_main_noage_engl_macro  = models_cpih_eng$main_0,
-  cpih_main_noage_engl_macro  = models_cpih_eng$main,
-  cpih_main_age_engl_macro    = models_cpih_eng$main_age,
-  cpih_int_noage_engl_macro   = models_cpih_eng$int,
-  cpih_int_age_engl_macro     = models_cpih_eng$int_age
+  cpih_main_noage_engl_econ_macro = models_cpih_eng$main_0,
+  cpih_main_noage_engl_macro      = models_cpih_eng$main,
+  cpih_main_age_engl_econ_macro   = models_cpih_eng$main_age_0,
+  cpih_main_age_engl_macro        = models_cpih_eng$main_age,
+  cpih_int_noage_engl_macro       = models_cpih_eng$int,
+  cpih_int_age_engl_macro         = models_cpih_eng$int_age
 )
 
 # --------------------------
-# D) Economic Identity Robustness
+# D) Englishness – Categorical
 # --------------------------
+macro_engl_categorical <- list(
 
+  gdp_main_noage_engl_cat_macro   = models_gdp_eng_cat$main,
+  gdp_main_age_engl_cat_macro     = models_gdp_eng_cat$main_age,
+  gdp_int_noage_engl_cat_macro    = models_gdp_eng_cat$int,
+  gdp_int_age_engl_cat_macro      = models_gdp_eng_cat$int_age,
+
+  unemp_main_noage_engl_cat_macro = models_unemp_eng_cat$main,
+  unemp_main_age_engl_cat_macro   = models_unemp_eng_cat$main_age,
+  unemp_int_noage_engl_cat_macro  = models_unemp_eng_cat$int,
+  unemp_int_age_engl_cat_macro    = models_unemp_eng_cat$int_age,
+
+  claimant_main_noage_engl_cat_macro = models_claim_eng_cat$main,
+  claimant_main_age_engl_cat_macro   = models_claim_eng_cat$main_age,
+  claimant_int_noage_engl_cat_macro  = models_claim_eng_cat$int,
+  claimant_int_age_engl_cat_macro    = models_claim_eng_cat$int_age,
+
+  cpih_main_noage_engl_cat_macro  = models_cpih_eng_cat$main,
+  cpih_main_age_engl_cat_macro    = models_cpih_eng_cat$main_age,
+  cpih_int_noage_engl_cat_macro   = models_cpih_eng_cat$int,
+  cpih_int_age_engl_cat_macro     = models_cpih_eng_cat$int_age
+)
+
+# --------------------------
+# E) Economic Identity Robustness
+# --------------------------
 macro_identity_robustness <- list(
 
   brit_gdp_macro          = brit_econ_rob_checks$brit_gdp,
@@ -904,25 +996,19 @@ macro_identity_robustness <- list(
 )
 
 # ============================================================
-# 8) SAVE EVERYTHING (SAFE VERSION)
+# 8) SAVE EVERYTHING
 # ============================================================
-
 macro_all_models <- c(
   macro_brit_continuous,
   macro_brit_categorical,
   macro_engl_continuous,
+  macro_engl_categorical,
   macro_identity_robustness
 )
 
-# Define path
 save_path <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/models"
+if (!dir.exists(save_path)) dir.create(save_path, recursive = TRUE)
 
-# Create directory if it doesn't exist
-if (!dir.exists(save_path)) {
-  dir.create(save_path, recursive = TRUE)
-}
-
-# Save
 saveRDS(
   macro_all_models,
   file.path(save_path, "macro_models_all.rds")
