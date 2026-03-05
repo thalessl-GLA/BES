@@ -1,0 +1,591 @@
+---
+title: "BES_Meso_Random_Effects"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+library(lme4)      # random effects
+library(lmerTest)  # p-values for lmer
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"
+
+MESO_UNEMP_BASE    <- "unemp_rate_mean"
+MESO_CLAIM_BASE    <- "claimant_mean"
+MESO_INCOME_BASE   <- "income"
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves <- Reduce(intersect, list(w_dv, w_brit, w_time))
+if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, and starttime.")
+
+w_age     <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves, w_age)
+
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(BRIT_BASE, "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age)
+)
+
+df_core <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x
+    if(inherits(x, "haven_labelled")) x <- zap_labels(x)
+    x
+  })) |>
+  select(id, any_of(core_cols))
+
+panel_long <- df_core |>
+  pivot_longer(
+    cols = -id,
+    names_to = c(".value","wave"),
+    names_pattern = "(.+)W(\\d+)$"
+  ) |>
+  mutate(
+    wave = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(
+    dv   = all_of(DV_BASE),
+    brit = all_of(BRIT_BASE),
+    age  = all_of(AGE_BASE)
+  ) |>
+  mutate(
+    dv   = as.numeric(dv),
+    brit = as.numeric(brit),
+    age  = as.numeric(age)
+  ) |>
+  filter(!is.na(dv), !is.na(brit), !is.na(wave))
+
+make_meso_long <- function(df, base, out_name, waves_keep){
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if(length(cols) == 0) return(NULL)
+
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+
+  if(nrow(tmp) == 0) return(NULL)
+
+  use_cols <- tmp$col
+
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols), ~ as.numeric(if(inherits(.x,"haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(
+      cols      = -id,
+      names_to  = "wave",
+      values_to = out_name,
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave))
+}
+
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_meso <- panel_long
+if(!is.null(meso_unemp))  panel_meso <- left_join(panel_meso, meso_unemp,  by = c("id","wave"))
+if(!is.null(meso_claim))  panel_meso <- left_join(panel_meso, meso_claim,  by = c("id","wave"))
+if(!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = c("id","wave"))
+
+
+# ==========================================================
+# MAIN MESO MODELS — RANDOM EFFECTS
+# Random intercepts for id and wave: (1|id) + (1|wave)
+# ==========================================================
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u <- panel_meso |> filter(!is.na(unemp_rate_mean))
+
+m_u0.1_re <- lmer(dv ~ unemp_rate_mean + (1|id) + (1|wave),            data = panel_u, REML = TRUE)
+m_u1_re   <- lmer(dv ~ brit + unemp_rate_mean + (1|id) + (1|wave),      data = panel_u, REML = TRUE)
+m_u0.2_re <- lmer(dv ~ unemp_rate_mean + age + (1|id) + (1|wave),       data = panel_u, REML = TRUE)
+m_u2_re   <- lmer(dv ~ brit + unemp_rate_mean + age + (1|id) + (1|wave), data = panel_u, REML = TRUE)
+m_u3_re   <- lmer(dv ~ brit * unemp_rate_mean + (1|id) + (1|wave),      data = panel_u, REML = TRUE)
+m_u4_re   <- lmer(dv ~ brit * unemp_rate_mean + age + (1|id) + (1|wave), data = panel_u, REML = TRUE)
+
+# ---------- CLAIMANT COUNT ----------
+panel_c <- panel_meso |> filter(!is.na(claimant_mean))
+
+m_c0.1_re <- lmer(dv ~ claimant_mean + (1|id) + (1|wave),               data = panel_c, REML = TRUE)
+m_c1_re   <- lmer(dv ~ brit + claimant_mean + (1|id) + (1|wave),         data = panel_c, REML = TRUE)
+m_c0.2_re <- lmer(dv ~ claimant_mean + age + (1|id) + (1|wave),          data = panel_c, REML = TRUE)
+m_c2_re   <- lmer(dv ~ brit + claimant_mean + age + (1|id) + (1|wave),   data = panel_c, REML = TRUE)
+m_c3_re   <- lmer(dv ~ brit * claimant_mean + (1|id) + (1|wave),         data = panel_c, REML = TRUE)
+m_c4_re   <- lmer(dv ~ brit * claimant_mean + age + (1|id) + (1|wave),   data = panel_c, REML = TRUE)
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i <- panel_meso |> filter(!is.na(income_meso))
+
+m_i0.1_re <- lmer(dv ~ income_meso + (1|id) + (1|wave),                 data = panel_i, REML = TRUE)
+m_i1_re   <- lmer(dv ~ brit + income_meso + (1|id) + (1|wave),           data = panel_i, REML = TRUE)
+m_i0.2_re <- lmer(dv ~ income_meso + age + (1|id) + (1|wave),            data = panel_i, REML = TRUE)
+m_i2_re   <- lmer(dv ~ brit + income_meso + age + (1|id) + (1|wave),     data = panel_i, REML = TRUE)
+m_i3_re   <- lmer(dv ~ brit * income_meso + (1|id) + (1|wave),           data = panel_i, REML = TRUE)
+m_i4_re   <- lmer(dv ~ brit * income_meso + age + (1|id) + (1|wave),     data = panel_i, REML = TRUE)
+
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+coverage <- panel_meso |>
+  summarise(
+    n_obs              = n(),
+    pct_unemp_nonmiss  = mean(!is.na(unemp_rate_mean)),
+    pct_claim_nonmiss  = mean(!is.na(claimant_mean)),
+    pct_inc_nonmiss    = mean(!is.na(income_meso)),
+    pct_age_nonmiss    = mean(!is.na(age))
+  )
+print(coverage)
+```
+
+TEXT HERE - TBD
+
+```{r meso_models_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_u0.1_re); summary(m_u1_re); summary(m_u0.2_re); summary(m_u2_re)
+summary(m_u3_re);   summary(m_u4_re)
+
+summary(m_c0.1_re); summary(m_c1_re); summary(m_c0.2_re); summary(m_c2_re)
+summary(m_c3_re);   summary(m_c4_re)
+
+summary(m_i0.1_re); summary(m_i1_re); summary(m_i0.2_re); summary(m_i2_re)
+summary(m_i3_re);   summary(m_i4_re)
+
+```
+
+## Meso-level analysis — Random Effects {.tabset}
+
+### Results
+
+TEXT HERE - TBD
+
+#### Local unemployment rate
+
+TEXT HERE - TBD
+
+#### Claimant count
+
+TEXT HERE - TBD
+
+#### Local Income (meso)
+
+TEXT HERE - TBD
+
+### Robustness Checks
+
+#### Britishness as Categorical
+
+```{r robs_check_brit_cat_re, include=FALSE, echo=FALSE}
+# ==========================================================
+# MESO MODELS (RE robustness): Britishness categorical (ref = 7)
+# Random intercepts for id and wave
+# ==========================================================
+
+panel_meso_cat <- panel_meso %>%
+  mutate(
+    brit = as.numeric(haven::zap_labels(brit)),
+    age  = as.numeric(haven::zap_labels(age)),
+    dv   = as.numeric(haven::zap_labels(dv))
+  ) %>%
+  filter(!is.na(dv), !is.na(brit), brit %in% 1:7, !is.na(wave)) %>%
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+# Global optimizer settings for all lmer models
+ctrl <- lmerControl(
+  optimizer = "bobyqa",
+  optCtrl = list(maxfun = 2e5)
+)
+
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u_cat <- panel_meso_cat %>% filter(!is.na(unemp_rate_mean))
+
+m_u1_cat_re <- lmer(dv ~ brit_cat + unemp_rate_mean + (1|id) + (1|wave),            data = panel_u_cat, REML = TRUE,
+  control = ctrl)
+m_u2_cat_re <- lmer(dv ~ brit_cat + unemp_rate_mean + age + (1|id) + (1|wave),       data = panel_u_cat, REML = TRUE,
+  control = ctrl)
+m_u3_cat_re <- lmer(dv ~ brit_cat * unemp_rate_mean + (1|id) + (1|wave),             data = panel_u_cat, REML = TRUE,
+  control = ctrl)
+m_u4_cat_re <- lmer(dv ~ brit_cat * unemp_rate_mean + age + (1|id) + (1|wave),       data = panel_u_cat, REML = TRUE,
+  control = ctrl)
+
+# ---------- CLAIMANT COUNT ----------
+panel_c_cat <- panel_meso_cat %>% filter(!is.na(claimant_mean))
+
+m_c1_cat_re <- lmer(dv ~ brit_cat + claimant_mean + (1|id) + (1|wave),              data = panel_c_cat, REML = TRUE,
+  control = ctrl)
+m_c2_cat_re <- lmer(dv ~ brit_cat + claimant_mean + age + (1|id) + (1|wave),         data = panel_c_cat, REML = TRUE,
+  control = ctrl)
+m_c3_cat_re <- lmer(dv ~ brit_cat * claimant_mean + (1|id) + (1|wave),               data = panel_c_cat, REML = TRUE,
+  control = ctrl)
+m_c4_cat_re <- lmer(dv ~ brit_cat * claimant_mean + age + (1|id) + (1|wave),         data = panel_c_cat, REML = TRUE,
+  control = ctrl)
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i_cat <- panel_meso_cat %>% filter(!is.na(income_meso))
+
+m_i1_cat_re <- lmer(dv ~ brit_cat + income_meso + (1|id) + (1|wave),                data = panel_i_cat, REML = TRUE,
+  control = ctrl)
+m_i2_cat_re <- lmer(dv ~ brit_cat + income_meso + age + (1|id) + (1|wave),           data = panel_i_cat, REML = TRUE,
+  control = ctrl)
+m_i3_cat_re <- lmer(dv ~ brit_cat * income_meso + (1|id) + (1|wave),                 data = panel_i_cat, REML = TRUE,
+  control = ctrl)
+m_i4_cat_re <- lmer(dv ~ brit_cat * income_meso + age + (1|id) + (1|wave),           data = panel_i_cat, REML = TRUE,
+  control = ctrl)
+
+```
+
+```{r meso_cat_models_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_u1_cat_re); summary(m_u2_cat_re); summary(m_u3_cat_re); summary(m_u4_cat_re)
+summary(m_c1_cat_re); summary(m_c2_cat_re); summary(m_c3_cat_re); summary(m_c4_cat_re)
+summary(m_i1_cat_re); summary(m_i2_cat_re); summary(m_i3_cat_re); summary(m_i4_cat_re)
+
+```
+
+TEXT HERE - TBD
+
+::: callout-note
+**Interpretive note.**\
+Each additional unit of Britishness weakens the effect of unemployment and claimant intensity on anti-immigration attitudes. These meso-economic effects are substantively meaningful only at low levels of national identification and converge to zero as Britishness increases.
+:::
+
+#### Other forms of Nationalism: Englishness
+
+```{r robs_check_englishness_re, include=FALSE, echo=FALSE}
+
+# ==========================================================
+# MESO MODELS (RE): Englishness continuous
+# ==========================================================
+
+DV_BASE   <- "immigSelf"
+ENG_BASE  <- "englishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"
+
+MESO_UNEMP_BASE  <- "unemp_rate_mean"
+MESO_CLAIM_BASE  <- "claimant_mean"
+MESO_INCOME_BASE <- "income"
+
+w_dv   <- waves_available(df, DV_BASE)
+w_eng  <- waves_available(df, ENG_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves <- Reduce(intersect, list(w_dv, w_eng, w_time))
+if(length(waves) < 3) stop("Too few overlapping waves across DV, englishness, and starttime.")
+
+w_age     <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves, w_age)
+
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(ENG_BASE,  "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age)
+)
+
+df_core <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x
+    if(inherits(x, "haven_labelled")) x <- zap_labels(x)
+    x
+  })) |>
+  select(id, any_of(core_cols))
+
+panel_long_eng <- df_core |>
+  pivot_longer(
+    cols = -id,
+    names_to = c(".value","wave"),
+    names_pattern = "(.+)W(\\d+)$"
+  ) |>
+  mutate(
+    wave             = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year             = year(starttime_parsed)
+  ) |>
+  rename(
+    dv   = all_of(DV_BASE),
+    engl = all_of(ENG_BASE),
+    age  = all_of(AGE_BASE)
+  ) |>
+  mutate(
+    dv   = as.numeric(dv),
+    engl = as.numeric(engl),
+    age  = as.numeric(age),
+    engl = dplyr::na_if(engl, 9999)
+  ) |>
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave))
+
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_meso_eng <- panel_long_eng
+if(!is.null(meso_unemp))  panel_meso_eng <- left_join(panel_meso_eng, meso_unemp,  by = c("id","wave"))
+if(!is.null(meso_claim))  panel_meso_eng <- left_join(panel_meso_eng, meso_claim,  by = c("id","wave"))
+if(!is.null(meso_income)) panel_meso_eng <- left_join(panel_meso_eng, meso_income, by = c("id","wave"))
+
+coverage_eng <- panel_meso_eng |>
+  summarise(
+    n_obs             = n(),
+    pct_unemp_nonmiss = mean(!is.na(unemp_rate_mean)),
+    pct_claim_nonmiss = mean(!is.na(claimant_mean)),
+    pct_inc_nonmiss   = mean(!is.na(income_meso)),
+    pct_age_nonmiss   = mean(!is.na(age))
+  )
+print(coverage_eng)
+
+# ---------- UNEMPLOYMENT RATE ----------
+panel_u_eng <- panel_meso_eng |> filter(!is.na(unemp_rate_mean))
+
+m_u0.1_eng_re <- lmer(dv ~ unemp_rate_mean + (1|id) + (1|wave),             data = panel_u_eng, REML = TRUE)
+m_u1_eng_re   <- lmer(dv ~ engl + unemp_rate_mean + (1|id) + (1|wave),       data = panel_u_eng, REML = TRUE)
+m_u0.2_eng_re <- lmer(dv ~ unemp_rate_mean + age + (1|id) + (1|wave),        data = panel_u_eng, REML = TRUE)
+m_u2_eng_re   <- lmer(dv ~ engl + unemp_rate_mean + age + (1|id) + (1|wave), data = panel_u_eng, REML = TRUE)
+m_u3_eng_re   <- lmer(dv ~ engl * unemp_rate_mean + (1|id) + (1|wave),       data = panel_u_eng, REML = TRUE)
+m_u4_eng_re   <- lmer(dv ~ engl * unemp_rate_mean + age + (1|id) + (1|wave), data = panel_u_eng, REML = TRUE)
+
+# ---------- CLAIMANT COUNT ----------
+panel_c_eng <- panel_meso_eng |> filter(!is.na(claimant_mean))
+
+m_c0.1_eng_re <- lmer(dv ~ claimant_mean + (1|id) + (1|wave),               data = panel_c_eng, REML = TRUE)
+m_c1_eng_re   <- lmer(dv ~ engl + claimant_mean + (1|id) + (1|wave),         data = panel_c_eng, REML = TRUE)
+m_c0.2_eng_re <- lmer(dv ~ claimant_mean + age + (1|id) + (1|wave),          data = panel_c_eng, REML = TRUE)
+m_c2_eng_re   <- lmer(dv ~ engl + claimant_mean + age + (1|id) + (1|wave),   data = panel_c_eng, REML = TRUE)
+m_c3_eng_re   <- lmer(dv ~ engl * claimant_mean + (1|id) + (1|wave),         data = panel_c_eng, REML = TRUE)
+m_c4_eng_re   <- lmer(dv ~ engl * claimant_mean + age + (1|id) + (1|wave),   data = panel_c_eng, REML = TRUE)
+
+# ---------- LOCAL INCOME (ASHE) ----------
+panel_i_eng <- panel_meso_eng |> filter(!is.na(income_meso))
+
+m_i0.1_eng_re <- lmer(dv ~ income_meso + (1|id) + (1|wave),                 data = panel_i_eng, REML = TRUE)
+m_i1_eng_re   <- lmer(dv ~ engl + income_meso + (1|id) + (1|wave),           data = panel_i_eng, REML = TRUE)
+m_i0.2_eng_re <- lmer(dv ~ income_meso + age + (1|id) + (1|wave),            data = panel_i_eng, REML = TRUE)
+m_i2_eng_re   <- lmer(dv ~ engl + income_meso + age + (1|id) + (1|wave),     data = panel_i_eng, REML = TRUE)
+m_i3_eng_re   <- lmer(dv ~ engl * income_meso + (1|id) + (1|wave),           data = panel_i_eng, REML = TRUE)
+m_i4_eng_re   <- lmer(dv ~ engl * income_meso + age + (1|id) + (1|wave),     data = panel_i_eng, REML = TRUE)
+
+```
+
+TEXT HERE - TBD
+
+```{r meso_englishness_models_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_u0.1_eng_re); summary(m_u1_eng_re); summary(m_u0.2_eng_re); summary(m_u2_eng_re)
+summary(m_u3_eng_re);   summary(m_u4_eng_re)
+
+summary(m_c0.1_eng_re); summary(m_c1_eng_re); summary(m_c0.2_eng_re); summary(m_c2_eng_re)
+summary(m_c3_eng_re);   summary(m_c4_eng_re)
+
+summary(m_i0.1_eng_re); summary(m_i1_eng_re); summary(m_i0.2_eng_re); summary(m_i2_eng_re)
+summary(m_i3_eng_re);   summary(m_i4_eng_re)
+
+```
+
+TEXT HERE - TBD
+
+```{r robs_check_engl_cat_re, include=FALSE, echo=FALSE}
+# ==========================================================
+# MESO MODELS (RE robustness): Englishness categorical (ref = 7)
+# ==========================================================
+
+panel_meso_eng_cat <- panel_meso_eng %>%
+  mutate(
+    engl = as.numeric(if(inherits(engl, "haven_labelled")) haven::zap_labels(engl) else engl),
+    age  = as.numeric(if(inherits(age,  "haven_labelled")) haven::zap_labels(age)  else age),
+    dv   = as.numeric(if(inherits(dv,   "haven_labelled")) haven::zap_labels(dv)   else dv)
+  ) %>%
+  mutate(engl = dplyr::na_if(engl, 9999)) %>%
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave)) %>%
+  mutate(engl_cat = relevel(factor(engl, levels = 1:7), ref = "7"))
+
+# ---------- UNEMPLOYMENT RATE (APS) ----------
+panel_u_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(unemp_rate_mean))
+
+m_u1_eng_cat_re <- lmer(dv ~ engl_cat + unemp_rate_mean + (1|id) + (1|wave),            data = panel_u_eng_cat, REML = TRUE,
+  control = ctrl)
+m_u2_eng_cat_re <- lmer(dv ~ engl_cat + unemp_rate_mean + age + (1|id) + (1|wave),       data = panel_u_eng_cat, REML = TRUE,
+  control = ctrl)
+m_u3_eng_cat_re <- lmer(dv ~ engl_cat * unemp_rate_mean + (1|id) + (1|wave),             data = panel_u_eng_cat, REML = TRUE,
+  control = ctrl)
+m_u4_eng_cat_re <- lmer(dv ~ engl_cat * unemp_rate_mean + age + (1|id) + (1|wave),       data = panel_u_eng_cat, REML = TRUE,
+  control = ctrl)
+
+# ---------- CLAIMANT COUNT ----------
+panel_c_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(claimant_mean))
+
+m_c1_eng_cat_re <- lmer(dv ~ engl_cat + claimant_mean + (1|id) + (1|wave),              data = panel_c_eng_cat, REML = TRUE,
+  control = ctrl)
+m_c2_eng_cat_re <- lmer(dv ~ engl_cat + claimant_mean + age + (1|id) + (1|wave),         data = panel_c_eng_cat, REML = TRUE,
+  control = ctrl)
+m_c3_eng_cat_re <- lmer(dv ~ engl_cat * claimant_mean + (1|id) + (1|wave),               data = panel_c_eng_cat, REML = TRUE,
+  control = ctrl)
+m_c4_eng_cat_re <- lmer(dv ~ engl_cat * claimant_mean + age + (1|id) + (1|wave),         data = panel_c_eng_cat, REML = TRUE,
+  control = ctrl)
+
+# ---------- ASHE EARNINGS (income_meso) ----------
+panel_i_eng_cat <- panel_meso_eng_cat %>% filter(!is.na(income_meso))
+
+m_i1_eng_cat_re <- lmer(dv ~ engl_cat + income_meso + (1|id) + (1|wave),                data = panel_i_eng_cat, REML = TRUE,
+  control = ctrl)
+m_i2_eng_cat_re <- lmer(dv ~ engl_cat + income_meso + age + (1|id) + (1|wave),           data = panel_i_eng_cat, REML = TRUE,
+  control = ctrl)
+m_i3_eng_cat_re <- lmer(dv ~ engl_cat * income_meso + (1|id) + (1|wave),                 data = panel_i_eng_cat, REML = TRUE,
+  control = ctrl)
+m_i4_eng_cat_re <- lmer(dv ~ engl_cat * income_meso + age + (1|id) + (1|wave),           data = panel_i_eng_cat, REML = TRUE,
+  control = ctrl)
+
+```
+
+```{r meso_engl_cat_models_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_u1_eng_cat_re); summary(m_u2_eng_cat_re); summary(m_u3_eng_cat_re); summary(m_u4_eng_cat_re)
+summary(m_c1_eng_cat_re); summary(m_c2_eng_cat_re); summary(m_c3_eng_cat_re); summary(m_c4_eng_cat_re)
+summary(m_i1_eng_cat_re); summary(m_i2_eng_cat_re); summary(m_i3_eng_cat_re); summary(m_i4_eng_cat_re)
+
+```
+
+```{r save_models_re, include=FALSE, echo=FALSE}
+# ==========================================================
+# SAVE MESO RANDOM EFFECTS MODELS
+# ==========================================================
+
+models_meso_re <- list(
+
+  # -------------------------
+  # Britishness (continuous)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_only_noage_meso_re = m_u0.1_re,
+  unemp_brit_noage_meso_re = m_u1_re,
+  unemp_only_age_meso_re   = m_u0.2_re,
+  unemp_brit_age_meso_re   = m_u2_re,
+  unemp_int_noage_meso_re  = m_u3_re,
+  unemp_int_age_meso_re    = m_u4_re,
+
+  # Claimant count
+  claimant_only_noage_meso_re = m_c0.1_re,
+  claimant_brit_noage_meso_re = m_c1_re,
+  claimant_only_age_meso_re   = m_c0.2_re,
+  claimant_brit_age_meso_re   = m_c2_re,
+  claimant_int_noage_meso_re  = m_c3_re,
+  claimant_int_age_meso_re    = m_c4_re,
+
+  # Local income (ASHE)
+  income_only_noage_meso_re = m_i0.1_re,
+  income_brit_noage_meso_re = m_i1_re,
+  income_only_age_meso_re   = m_i0.2_re,
+  income_brit_age_meso_re   = m_i2_re,
+  income_int_noage_meso_re  = m_i3_re,
+  income_int_age_meso_re    = m_i4_re,
+
+  # -------------------------
+  # Britishness (categorical)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_britcat_noage_meso_re     = m_u1_cat_re,
+  unemp_britcat_age_meso_re       = m_u2_cat_re,
+  unemp_britcat_int_noage_meso_re = m_u3_cat_re,
+  unemp_britcat_int_age_meso_re   = m_u4_cat_re,
+
+  # Claimant count
+  claimant_britcat_noage_meso_re     = m_c1_cat_re,
+  claimant_britcat_age_meso_re       = m_c2_cat_re,
+  claimant_britcat_int_noage_meso_re = m_c3_cat_re,
+  claimant_britcat_int_age_meso_re   = m_c4_cat_re,
+
+  # Local income (ASHE)
+  income_britcat_noage_meso_re     = m_i1_cat_re,
+  income_britcat_age_meso_re       = m_i2_cat_re,
+  income_britcat_int_noage_meso_re = m_i3_cat_re,
+  income_britcat_int_age_meso_re   = m_i4_cat_re,
+
+  # -------------------------
+  # Englishness (continuous)
+  # -------------------------
+
+  # Unemployment (APS)
+  unemp_only_noage_eng_meso_re = m_u0.1_eng_re,
+  unemp_engl_noage_meso_re     = m_u1_eng_re,
+  unemp_only_age_eng_meso_re   = m_u0.2_eng_re,
+  unemp_engl_age_meso_re       = m_u2_eng_re,
+  unemp_int_noage_eng_meso_re  = m_u3_eng_re,
+  unemp_int_age_eng_meso_re    = m_u4_eng_re,
+
+  # Claimant count
+  claimant_only_noage_eng_meso_re = m_c0.1_eng_re,
+  claimant_engl_noage_meso_re     = m_c1_eng_re,
+  claimant_only_age_eng_meso_re   = m_c0.2_eng_re,
+  claimant_engl_age_meso_re       = m_c2_eng_re,
+  claimant_int_noage_eng_meso_re  = m_c3_eng_re,
+  claimant_int_age_eng_meso_re    = m_c4_eng_re,
+
+  # Local income (ASHE)
+  income_only_noage_eng_meso_re = m_i0.1_eng_re,
+  income_engl_noage_meso_re     = m_i1_eng_re,
+  income_only_age_eng_meso_re   = m_i0.2_eng_re,
+  income_engl_age_meso_re       = m_i2_eng_re,
+  income_int_noage_eng_meso_re  = m_i3_eng_re,
+  income_int_age_eng_meso_re    = m_i4_eng_re,
+
+  # -------------------------
+  # Englishness (categorical)
+  # -------------------------
+
+  unemp_main_noage_eng_cat_re = m_u1_eng_cat_re,
+  unemp_main_age_eng_cat_re   = m_u2_eng_cat_re,
+  unemp_int_noage_eng_cat_re  = m_u3_eng_cat_re,
+  unemp_int_age_eng_cat_re    = m_u4_eng_cat_re,
+
+  claimant_main_noage_eng_cat_re = m_c1_eng_cat_re,
+  claimant_main_age_eng_cat_re   = m_c2_eng_cat_re,
+  claimant_int_noage_eng_cat_re  = m_c3_eng_cat_re,
+  claimant_int_age_eng_cat_re    = m_c4_eng_cat_re,
+
+  income_main_noage_eng_cat_re = m_i1_eng_cat_re,
+  income_main_age_eng_cat_re   = m_i2_eng_cat_re,
+  income_int_noage_eng_cat_re  = m_i3_eng_cat_re,
+  income_int_age_eng_cat_re    = m_i4_eng_cat_re
+)
+
+out_dir_re <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/models_meso_re"
+dir.create(out_dir_re, recursive = TRUE, showWarnings = FALSE)
+
+saveRDS(models_meso_re, file.path(out_dir_re, "models_meso_re_all.rds"))
+
+cat("Saved MESO RE models to:", out_dir_re, "\n")
+cat("Total models saved:", length(models_meso_re), "\n")
+```
