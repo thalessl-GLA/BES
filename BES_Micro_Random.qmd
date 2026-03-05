@@ -1,0 +1,993 @@
+---
+title: "BES_Micro_Random_Effects"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+library(lme4)      # for lmer (random effects)
+library(lmerTest)  # for p-values in lmer
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"   
+
+get_wave_num2 <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available2 <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num2)))
+}
+
+make_long_with_age <- function(df,
+                               dv_base   = "immigSelf",
+                               brit_base = "britishness",
+                               time_base = "starttime",
+                               age_base  = "age"){
+
+  w_dv   <- waves_available2(df, dv_base)
+  w_brit <- waves_available2(df, brit_base)
+  w_time <- waves_available2(df, time_base)
+  w_age  <- waves_available2(df, age_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_age))
+  if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, starttime, and age.")
+
+  dv_cols   <- paste0(dv_base,   "W", waves)
+  brit_cols <- paste0(brit_base, "W", waves)
+  time_cols <- paste0(time_base, "W", waves)
+  age_cols  <- paste0(age_base,  "W", waves)
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),   ~ as.numeric(zap_labels(.x))),
+      across(all_of(brit_cols), ~ as.numeric(zap_labels(.x))),
+      across(all_of(age_cols),  ~ as.numeric(zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id, all_of(dv_cols), all_of(brit_cols), all_of(time_cols), all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv   = all_of(dv_base),
+      brit = all_of(brit_base),
+      age  = all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+panel_self |>
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    min_wave = min(wave),
+    max_wave = max(wave),
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE),
+    age_min = min(age, na.rm = TRUE),
+    age_max = max(age, na.rm = TRUE)
+  )
+```
+
+## Micro level results — Random Effects
+
+### Base Models
+
+```{r models_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Model 1 RE: brit + (1|id) + (1|wave)
+m1_re <- lmer(
+  dv ~ brit + (1 | id) + (1 | wave),
+  data = panel_self,
+  REML = TRUE
+)
+
+summary(m1_re)
+
+# Model 2 RE: brit + age + (1|id) + (1|wave)
+m2_re <- lmer(
+  dv ~ brit + age + (1 | id) + (1 | wave),
+  data = panel_self,
+  REML = TRUE
+)
+
+summary(m2_re)
+
+```
+
+TEXT HERE - TBD
+
+```{r flexible_wave_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Wave-specific effect of Britishness (wave × brit interaction; random intercept for id)
+m_wave_re <- lmer(
+  dv ~ brit * factor(wave) + (1 | id),
+  data = panel_self,
+  REML = TRUE
+)
+
+summary(m_wave_re)
+
+```
+
+TEXT HERE - TBD
+
+### Economic Context Moderation: Individual Income
+
+```{r income_0_re, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+INCOME_BASE <- "income"
+
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+make_long_with_income <- function(df,
+                                  dv_base,
+                                  brit_base,
+                                  time_base,
+                                  income_base,
+                                  age_base = NULL){
+
+  w_dv     <- waves_available(df, dv_base)
+  w_brit   <- waves_available(df, brit_base)
+  w_time   <- waves_available(df, time_base)
+  w_income <- waves_available(df, income_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_income))
+
+  if(!is.null(age_base)){
+    w_age <- waves_available(df, age_base)
+    waves <- intersect(waves, w_age)
+  }
+
+  if(length(waves) < 3){
+    stop("Too few overlapping waves across DV, britishness, time, income (and age).")
+  }
+
+  dv_cols     <- paste0(dv_base,     "W", waves)
+  brit_cols   <- paste0(brit_base,   "W", waves)
+  time_cols   <- paste0(time_base,   "W", waves)
+  income_cols <- paste0(income_base, "W", waves)
+  age_cols    <- if(!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),     ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(brit_cols),   ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(income_cols), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),    ~ as.numeric(haven::zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id,
+           all_of(dv_cols),
+           all_of(brit_cols),
+           all_of(time_cols),
+           all_of(income_cols),
+           all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv     = all_of(dv_base),
+      brit   = all_of(brit_base),
+      income = all_of(income_base),
+      age    = if(!is.null(age_base)) all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+
+panel_income_noage <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, age_base = NULL
+)
+
+panel_income_age <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, age_base = AGE_BASE
+)
+
+# (0.1) Income sole, no age
+m_inc_0.1_re <- lmer(
+  dv ~ income + (1 | id) + (1 | wave),
+  data = panel_income_noage,
+  REML = TRUE
+)
+
+# (1) brit + income, no age
+m_inc_1_re <- lmer(
+  dv ~ brit + income + (1 | id) + (1 | wave),
+  data = panel_income_noage,
+  REML = TRUE
+)
+
+# (0.2) Income sole, with age
+m_inc_0.2_re <- lmer(
+  dv ~ income + age + (1 | id) + (1 | wave),
+  data = panel_income_age,
+  REML = TRUE
+)
+
+# (2) brit + income + age
+m_inc_2_re <- lmer(
+  dv ~ brit + income + age + (1 | id) + (1 | wave),
+  data = panel_income_age,
+  REML = TRUE
+)
+
+# (3) Moderation, no age
+m_inc_3_re <- lmer(
+  dv ~ brit * income + (1 | id) + (1 | wave),
+  data = panel_income_noage,
+  REML = TRUE
+)
+
+# (4) Moderation, with age
+m_inc_4_re <- lmer(
+  dv ~ brit * income + age + (1 | id) + (1 | wave),
+  data = panel_income_age,
+  REML = TRUE
+)
+```
+
+```{r income_1_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_inc_0.1_re)
+summary(m_inc_1_re)
+summary(m_inc_0.2_re)
+summary(m_inc_2_re)
+summary(m_inc_3_re)
+summary(m_inc_4_re)
+```
+
+TEXT HERE - TBD
+
+```{r income_equivalised_re, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds")
+
+eq_long <- eq_long %>%
+  mutate(
+    id   = as.character(id),
+    wave = as.integer(wave)
+  )
+
+panel_eq_noage <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, income_base = INCOME_BASE, age_base = NULL
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq_age <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, income_base = INCOME_BASE, age_base = AGE_BASE
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq03_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child03))
+panel_eq05_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child05))
+
+if(nrow(panel_eq03_noage) == 0 || nrow(panel_eq03_age) == 0){
+  stop("No non-missing income_eq_child03 observations after merge.")
+}
+if(nrow(panel_eq05_noage) == 0 || nrow(panel_eq05_age) == 0){
+  stop("No non-missing income_eq_child05 observations after merge.")
+}
+
+# --- Bound A: child weight = 0.3 ---
+m_eq03_0.1_re <- lmer(dv ~ income_eq_child03 + (1|id) + (1|wave),               data = panel_eq03_noage, REML = TRUE)
+m_eq03_1_re   <- lmer(dv ~ brit + income_eq_child03 + (1|id) + (1|wave),         data = panel_eq03_noage, REML = TRUE)
+m_eq03_0.2_re <- lmer(dv ~ income_eq_child03 + age + (1|id) + (1|wave),          data = panel_eq03_age,   REML = TRUE)
+m_eq03_2_re   <- lmer(dv ~ brit + income_eq_child03 + age + (1|id) + (1|wave),   data = panel_eq03_age,   REML = TRUE)
+m_eq03_3_re   <- lmer(dv ~ brit * income_eq_child03 + (1|id) + (1|wave),         data = panel_eq03_noage, REML = TRUE)
+m_eq03_4_re   <- lmer(dv ~ brit * income_eq_child03 + age + (1|id) + (1|wave),   data = panel_eq03_age,   REML = TRUE)
+
+# --- Bound B: child weight = 0.5 ---
+m_eq05_0.1_re <- lmer(dv ~ income_eq_child05 + (1|id) + (1|wave),               data = panel_eq05_noage, REML = TRUE)
+m_eq05_1_re   <- lmer(dv ~ brit + income_eq_child05 + (1|id) + (1|wave),         data = panel_eq05_noage, REML = TRUE)
+m_eq05_0.2_re <- lmer(dv ~ income_eq_child05 + age + (1|id) + (1|wave),          data = panel_eq05_age,   REML = TRUE)
+m_eq05_2_re   <- lmer(dv ~ brit + income_eq_child05 + age + (1|id) + (1|wave),   data = panel_eq05_age,   REML = TRUE)
+m_eq05_3_re   <- lmer(dv ~ brit * income_eq_child05 + (1|id) + (1|wave),         data = panel_eq05_noage, REML = TRUE)
+m_eq05_4_re   <- lmer(dv ~ brit * income_eq_child05 + age + (1|id) + (1|wave),   data = panel_eq05_age,   REML = TRUE)
+```
+
+```{r income_equivalised_results_1_re, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound A: child weight = 0.3
+summary(m_eq03_0.1_re)
+summary(m_eq03_1_re)
+summary(m_eq03_0.2_re)
+summary(m_eq03_2_re)
+summary(m_eq03_3_re)
+summary(m_eq03_4_re)
+```
+
+TEXT HERE - TBD
+
+```{r income_equivalised_results_2_re, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound B: child weight = 0.5
+summary(m_eq05_0.1_re)
+summary(m_eq05_1_re)
+summary(m_eq05_0.2_re)
+summary(m_eq05_2_re)
+summary(m_eq05_3_re)
+summary(m_eq05_4_re)
+```
+
+TEXT HERE - TBD
+
+### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r risk_0_re, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+RISK_BASE <- "riskUnemployment"
+
+panel_risk_noage <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, income_base = RISK_BASE, age_base = NULL
+) %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
+
+panel_risk_age <- make_long_with_income(
+  df, DV_BASE, BRIT_BASE, TIME_BASE, income_base = RISK_BASE, age_base = AGE_BASE
+) %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
+
+m_risk_0.1_re <- lmer(dv ~ risk_unemp + (1|id) + (1|wave),                data = panel_risk_noage, REML = TRUE)
+m_risk_1_re   <- lmer(dv ~ brit + risk_unemp + (1|id) + (1|wave),          data = panel_risk_noage, REML = TRUE)
+m_risk_0.2_re <- lmer(dv ~ risk_unemp + age + (1|id) + (1|wave),           data = panel_risk_age,   REML = TRUE)
+m_risk_2_re   <- lmer(dv ~ brit + risk_unemp + age + (1|id) + (1|wave),    data = panel_risk_age,   REML = TRUE)
+m_risk_3_re   <- lmer(dv ~ brit * risk_unemp + (1|id) + (1|wave),          data = panel_risk_noage, REML = TRUE)
+m_risk_4_re   <- lmer(dv ~ brit * risk_unemp + age + (1|id) + (1|wave),    data = panel_risk_age,   REML = TRUE)
+```
+
+```{r risk_1_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_risk_0.1_re)
+summary(m_risk_1_re)
+summary(m_risk_0.2_re)
+summary(m_risk_2_re)
+summary(m_risk_3_re)
+summary(m_risk_4_re)
+```
+
+TEXT HERE - TBD
+
+```{r risk_2_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Diagnostic: Does unemployment risk predict Britishness?
+m_brit_risk_noage_re <- lmer(
+  brit ~ risk_unemp + (1|id) + (1|wave),
+  data = panel_risk_noage,
+  REML = TRUE
+)
+
+m_brit_risk_re <- lmer(
+  brit ~ risk_unemp + age + (1|id) + (1|wave),
+  data = panel_risk_age,
+  REML = TRUE
+)
+
+summary(m_brit_risk_noage_re)
+summary(m_brit_risk_re)
+```
+
+TEXT HERE - TBD
+
+## Robustness Checks
+
+### Britishness as Categorical
+
+```{r 0.1_re, include=FALSE, echo=FALSE}
+
+panel_self <- panel_self |>
+  mutate(
+    brit_cat = factor(brit, levels = 1:7),
+    brit_cat = relevel(brit_cat, ref = "7")
+  )
+
+panel_income_noage <- panel_income_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_income_age <- panel_income_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_noage <- panel_risk_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_age <- panel_risk_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_noage <- panel_eq_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_age <- panel_eq_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq03_noage <- panel_eq03_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq03_age <- panel_eq03_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq05_noage <- panel_eq05_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq05_age <- panel_eq05_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+# Global optimizer settings for all lmer models
+ctrl <- lmerControl(
+  optimizer = "bobyqa",
+  optCtrl = list(maxfun = 2e5)
+)
+
+```
+
+#### Base Models
+
+```{r brit_cat_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+m1_cat_re <- lmer(
+  dv ~ brit_cat + (1|id) + (1|wave),
+  data = panel_self,
+  REML = TRUE,
+  control = ctrl
+)
+
+m2_cat_re <- lmer(
+  dv ~ brit_cat + age + (1|id) + (1|wave),
+  data = panel_self,
+  REML = TRUE,
+  control = ctrl
+)
+
+# Wave-specific categorical: brit_cat × wave interaction
+m_wave_cat_re <- lmer(
+  dv ~ brit_cat * factor(wave) + (1|id),
+  data = panel_self,
+  REML = TRUE
+)
+
+summary(m1_cat_re)
+summary(m2_cat_re)
+summary(m_wave_cat_re)
+```
+
+TEXT HERE - TBD
+
+#### Economic Context Moderation: Individual Income
+
+```{r brit_cat_income_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+m_inc_cat_1_re <- lmer(dv ~ brit_cat + income + (1|id) + (1|wave),               data = panel_income_noage, REML = TRUE,
+  control = ctrl)
+m_inc_cat_2_re <- lmer(dv ~ brit_cat + income + age + (1|id) + (1|wave),          data = panel_income_age,   REML = TRUE,
+  control = ctrl)
+m_inc_cat_3_re <- lmer(dv ~ brit_cat * income + (1|id) + (1|wave),                data = panel_income_noage, REML = TRUE,
+  control = ctrl)
+m_inc_cat_4_re <- lmer(dv ~ brit_cat * income + age + (1|id) + (1|wave),          data = panel_income_age,   REML = TRUE,
+  control = ctrl)
+
+m_eq03_cat_1_re <- lmer(dv ~ brit_cat + income_eq_child03 + (1|id) + (1|wave),              data = panel_eq03_noage, REML = TRUE,
+  control = ctrl)
+m_eq03_cat_2_re <- lmer(dv ~ brit_cat + income_eq_child03 + age + (1|id) + (1|wave),         data = panel_eq03_age,   REML = TRUE,
+  control = ctrl)
+m_eq03_cat_3_re <- lmer(dv ~ brit_cat * income_eq_child03 + (1|id) + (1|wave),               data = panel_eq03_noage, REML = TRUE,
+  control = ctrl)
+m_eq03_cat_4_re <- lmer(dv ~ brit_cat * income_eq_child03 + age + (1|id) + (1|wave),         data = panel_eq03_age,   REML = TRUE,
+  control = ctrl)
+
+m_eq05_cat_1_re <- lmer(dv ~ brit_cat + income_eq_child05 + (1|id) + (1|wave),              data = panel_eq05_noage, REML = TRUE,
+  control = ctrl)
+m_eq05_cat_2_re <- lmer(dv ~ brit_cat + income_eq_child05 + age + (1|id) + (1|wave),         data = panel_eq05_age,   REML = TRUE,
+  control = ctrl)
+m_eq05_cat_3_re <- lmer(dv ~ brit_cat * income_eq_child05 + (1|id) + (1|wave),               data = panel_eq05_noage, REML = TRUE,
+  control = ctrl)
+m_eq05_cat_4_re <- lmer(dv ~ brit_cat * income_eq_child05 + age + (1|id) + (1|wave),         data = panel_eq05_age,   REML = TRUE,
+  control = ctrl)
+
+summary(m_inc_cat_1_re)
+summary(m_inc_cat_2_re)
+summary(m_inc_cat_3_re)
+summary(m_inc_cat_4_re)
+summary(m_eq03_cat_1_re)
+summary(m_eq03_cat_2_re)
+summary(m_eq03_cat_3_re)
+summary(m_eq03_cat_4_re)
+summary(m_eq05_cat_1_re)
+summary(m_eq05_cat_2_re)
+summary(m_eq05_cat_3_re)
+summary(m_eq05_cat_4_re)
+```
+
+TEXT HERE - TBD
+
+#### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r brit_cat_risk_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+m_risk_cat_1_re <- lmer(dv ~ brit_cat + risk_unemp + (1|id) + (1|wave),            data = panel_risk_noage, REML = TRUE,
+  control = ctrl)
+m_risk_cat_2_re <- lmer(dv ~ brit_cat + risk_unemp + age + (1|id) + (1|wave),       data = panel_risk_age,   REML = TRUE,
+  control = ctrl)
+m_risk_cat_3_re <- lmer(dv ~ brit_cat * risk_unemp + (1|id) + (1|wave),             data = panel_risk_noage, REML = TRUE,
+  control = ctrl)
+m_risk_cat_4_re <- lmer(dv ~ brit_cat * risk_unemp + age + (1|id) + (1|wave),       data = panel_risk_age,   REML = TRUE,
+  control = ctrl)
+
+summary(m_risk_cat_1_re)
+summary(m_risk_cat_2_re)
+summary(m_risk_cat_3_re)
+summary(m_risk_cat_4_re)
+```
+
+TEXT HERE - TBD
+
+### Other measures of nationalism
+
+TEXT HERE - TBD
+
+```{r eng_brit_plot_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(ggplot2)
+
+ids_wave <- df %>%
+  select(
+    id,
+    matches("^britishnessW\\d+$"),
+    matches("^englishnessW\\d+$")
+  ) %>%
+  mutate(across(-id, ~ as.numeric(zap_labels(.)))) %>%
+  pivot_longer(
+    cols = -id,
+    names_to = c("identity", "wave"),
+    names_pattern = "(britishness|englishness)W(\\d+)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    identity = recode(identity,
+                      britishness = "Britishness",
+                      englishness = "Englishness"),
+    value = if_else(value %in% 1:7, value, NA_real_)
+  ) %>%
+  group_by(identity, wave) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
+
+ggplot(ids_wave, aes(wave, mean_value, color = identity)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Mean identity strength (1–7)",
+    color = "Identity",
+    title = "Evolution of Britishness and Englishness across BES waves"
+  )
+
+ids_wave_dm <- ids_wave %>%
+  group_by(identity) %>%
+  mutate(mean_dm = mean_value - mean(mean_value, na.rm = TRUE))
+
+ggplot(ids_wave_dm, aes(wave, mean_dm, color = identity)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Deviation from identity mean",
+    color = "Identity",
+    title = "Within-wave change: Britishness vs Englishness"
+  )
+```
+
+TEXT HERE - TBD
+
+::: callout-note
+Britishness and Englishness are not measured in every BES wave. The figure plots wave-specific means for each identity in the waves in which it is observed, aligned to the common BES wave index for descriptive comparison.
+:::
+
+```{r englishness_base_models_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+ENG_BASE <- "englishness"
+
+panel_self_eng <- make_long_with_age(
+  df,
+  dv_base   = DV_BASE,
+  brit_base = ENG_BASE,
+  time_base = TIME_BASE,
+  age_base  = AGE_BASE
+) %>%
+  rename(engl = brit) %>%
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+m1_eng_re <- lmer(
+  dv ~ engl + (1|id) + (1|wave),
+  data = panel_self_eng,
+  REML = TRUE
+)
+
+m2_eng_re <- lmer(
+  dv ~ engl + age + (1|id) + (1|wave),
+  data = panel_self_eng,
+  REML = TRUE
+)
+
+m_wave_eng_re <- lmer(
+  dv ~ engl * factor(wave) + (1|id),
+  data = panel_self_eng,
+  REML = TRUE
+)
+
+summary(m1_eng_re)
+summary(m2_eng_re)
+summary(m_wave_eng_re)
+```
+
+TEXT HERE - TBD
+
+```{r englishness_income_models_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+ENG_BASE <- "englishness"
+
+panel_eng_eq_noage <- make_long_with_income(
+  df, dv_base = DV_BASE, brit_base = ENG_BASE,
+  time_base = TIME_BASE, income_base = INCOME_BASE, age_base = NULL
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(
+  df, dv_base = DV_BASE, brit_base = ENG_BASE,
+  time_base = TIME_BASE, income_base = INCOME_BASE, age_base = AGE_BASE
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq03_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq05_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+
+# child weight = 0.3
+m_eng_eq03_0.1_re <- lmer(dv ~ income_eq_child03 + (1|id) + (1|wave),              data = panel_eng_eq03_noage, REML = TRUE)
+m_eng_eq03_1_re   <- lmer(dv ~ engl + income_eq_child03 + (1|id) + (1|wave),        data = panel_eng_eq03_noage, REML = TRUE)
+m_eng_eq03_0.2_re <- lmer(dv ~ income_eq_child03 + age + (1|id) + (1|wave),         data = panel_eng_eq03_age,   REML = TRUE)
+m_eng_eq03_2_re   <- lmer(dv ~ engl + income_eq_child03 + age + (1|id) + (1|wave),  data = panel_eng_eq03_age,   REML = TRUE)
+m_eng_eq03_3_re   <- lmer(dv ~ engl * income_eq_child03 + (1|id) + (1|wave),        data = panel_eng_eq03_noage, REML = TRUE)
+m_eng_eq03_4_re   <- lmer(dv ~ engl * income_eq_child03 + age + (1|id) + (1|wave),  data = panel_eng_eq03_age,   REML = TRUE)
+
+# child weight = 0.5
+m_eng_eq05_0.1_re <- lmer(dv ~ income_eq_child05 + (1|id) + (1|wave),              data = panel_eng_eq05_noage, REML = TRUE)
+m_eng_eq05_1_re   <- lmer(dv ~ engl + income_eq_child05 + (1|id) + (1|wave),        data = panel_eng_eq05_noage, REML = TRUE)
+m_eng_eq05_0.2_re <- lmer(dv ~ income_eq_child05 + age + (1|id) + (1|wave),         data = panel_eng_eq05_age,   REML = TRUE)
+m_eng_eq05_2_re   <- lmer(dv ~ engl + income_eq_child05 + age + (1|id) + (1|wave),  data = panel_eng_eq05_age,   REML = TRUE)
+m_eng_eq05_3_re   <- lmer(dv ~ engl * income_eq_child05 + (1|id) + (1|wave),        data = panel_eng_eq05_noage, REML = TRUE)
+m_eng_eq05_4_re   <- lmer(dv ~ engl * income_eq_child05 + age + (1|id) + (1|wave),  data = panel_eng_eq05_age,   REML = TRUE)
+
+summary(m_eng_eq03_0.1_re); summary(m_eng_eq03_1_re); summary(m_eng_eq03_0.2_re)
+summary(m_eng_eq03_2_re);   summary(m_eng_eq03_3_re); summary(m_eng_eq03_4_re)
+summary(m_eng_eq05_0.1_re); summary(m_eng_eq05_1_re); summary(m_eng_eq05_0.2_re)
+summary(m_eng_eq05_2_re);   summary(m_eng_eq05_3_re); summary(m_eng_eq05_4_re)
+```
+
+TEXT HERE - TBD
+
+```{r englishness_risk_models_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+ENG_BASE  <- "englishness"
+RISK_BASE <- "riskUnemployment"
+
+panel_risk_noage_eng <- make_long_with_income(
+  df, dv_base = DV_BASE, brit_base = ENG_BASE,
+  time_base = TIME_BASE, income_base = RISK_BASE, age_base = NULL
+) %>%
+  rename(engl = brit, risk_unemp = income) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+panel_risk_age_eng <- make_long_with_income(
+  df, dv_base = DV_BASE, brit_base = ENG_BASE,
+  time_base = TIME_BASE, income_base = RISK_BASE, age_base = AGE_BASE
+) %>%
+  rename(engl = brit, risk_unemp = income) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+m_risk_eng_0.1_re <- lmer(dv ~ risk_unemp + (1|id) + (1|wave),               data = panel_risk_noage_eng, REML = TRUE)
+m_risk_eng_1_re   <- lmer(dv ~ engl + risk_unemp + (1|id) + (1|wave),         data = panel_risk_noage_eng, REML = TRUE)
+m_risk_eng_0.2_re <- lmer(dv ~ risk_unemp + age + (1|id) + (1|wave),          data = panel_risk_age_eng,   REML = TRUE)
+m_risk_eng_2_re   <- lmer(dv ~ engl + risk_unemp + age + (1|id) + (1|wave),   data = panel_risk_age_eng,   REML = TRUE)
+m_risk_eng_3_re   <- lmer(dv ~ engl * risk_unemp + (1|id) + (1|wave),         data = panel_risk_noage_eng, REML = TRUE)
+m_risk_eng_4_re   <- lmer(dv ~ engl * risk_unemp + age + (1|id) + (1|wave),   data = panel_risk_age_eng,   REML = TRUE)
+
+summary(m_risk_eng_0.1_re)
+summary(m_risk_eng_1_re)
+summary(m_risk_eng_0.2_re)
+summary(m_risk_eng_2_re)
+summary(m_risk_eng_3_re)
+summary(m_risk_eng_4_re)
+```
+
+TEXT HERE - TBD
+
+```{r englishness_risk_diagnostic_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Diagnostic: Does unemployment risk predict Englishness?
+m_engl_risk_noage_re <- lmer(
+  engl ~ risk_unemp + (1|id) + (1|wave),
+  data = panel_risk_noage_eng,
+  REML = TRUE
+)
+
+m_engl_risk_re <- lmer(
+  engl ~ risk_unemp + age + (1|id) + (1|wave),
+  data = panel_risk_age_eng,
+  REML = TRUE
+)
+
+summary(m_engl_risk_noage_re)
+summary(m_engl_risk_re)
+```
+
+TEXT HERE - TBD
+
+```{r englishness_categorical_micro_re, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+panel_self_eng <- panel_self_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_num = if_else(engl_num %in% 1:7, engl_num, NA_real_),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq03_noage <- panel_eng_eq03_noage %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq03_age <- panel_eng_eq03_age %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_noage <- panel_eng_eq05_noage %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_age <- panel_eng_eq05_age %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_noage_eng <- panel_risk_noage_eng %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_age_eng <- panel_risk_age_eng %>%
+  mutate(engl_num = as.numeric(engl), engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) %>%
+  filter(!is.na(engl_num))
+
+# Base models
+m1_eng_cat_re <- lmer(dv ~ engl_cat + (1|id) + (1|wave),          data = panel_self_eng, REML = TRUE,
+  control = ctrl)
+m2_eng_cat_re <- lmer(dv ~ engl_cat + age + (1|id) + (1|wave),     data = panel_self_eng, REML = TRUE,
+  control = ctrl)
+m_wave_eng_cat_re <- lmer(dv ~ engl_cat * factor(wave) + (1|id),   data = panel_self_eng, REML = TRUE,
+  control = ctrl)
+
+# eq03
+m_eng_eq03_cat_1_re <- lmer(dv ~ engl_cat + income_eq_child03 + (1|id) + (1|wave),             data = panel_eng_eq03_noage, REML = TRUE,
+  control = ctrl)
+m_eng_eq03_cat_2_re <- lmer(dv ~ engl_cat + income_eq_child03 + age + (1|id) + (1|wave),        data = panel_eng_eq03_age,   REML = TRUE,
+  control = ctrl)
+m_eng_eq03_cat_3_re <- lmer(dv ~ engl_cat * income_eq_child03 + (1|id) + (1|wave),              data = panel_eng_eq03_noage, REML = TRUE,
+  control = ctrl)
+m_eng_eq03_cat_4_re <- lmer(dv ~ engl_cat * income_eq_child03 + age + (1|id) + (1|wave),        data = panel_eng_eq03_age,   REML = TRUE,
+  control = ctrl)
+
+# eq05
+m_eng_eq05_cat_1_re <- lmer(dv ~ engl_cat + income_eq_child05 + (1|id) + (1|wave),             data = panel_eng_eq05_noage, REML = TRUE,
+  control = ctrl)
+m_eng_eq05_cat_2_re <- lmer(dv ~ engl_cat + income_eq_child05 + age + (1|id) + (1|wave),        data = panel_eng_eq05_age,   REML = TRUE,
+  control = ctrl)
+m_eng_eq05_cat_3_re <- lmer(dv ~ engl_cat * income_eq_child05 + (1|id) + (1|wave),              data = panel_eng_eq05_noage, REML = TRUE,
+  control = ctrl)
+m_eng_eq05_cat_4_re <- lmer(dv ~ engl_cat * income_eq_child05 + age + (1|id) + (1|wave),        data = panel_eng_eq05_age,   REML = TRUE,
+  control = ctrl)
+
+# risk
+m_risk_eng_cat_1_re <- lmer(dv ~ engl_cat + risk_unemp + (1|id) + (1|wave),            data = panel_risk_noage_eng, REML = TRUE,
+  control = ctrl)
+m_risk_eng_cat_2_re <- lmer(dv ~ engl_cat + risk_unemp + age + (1|id) + (1|wave),       data = panel_risk_age_eng,   REML = TRUE,
+  control = ctrl)
+m_risk_eng_cat_3_re <- lmer(dv ~ engl_cat * risk_unemp + (1|id) + (1|wave),             data = panel_risk_noage_eng, REML = TRUE,
+  control = ctrl)
+m_risk_eng_cat_4_re <- lmer(dv ~ engl_cat * risk_unemp + age + (1|id) + (1|wave),       data = panel_risk_age_eng,   REML = TRUE,
+  control = ctrl)
+
+```
+
+```{r englishness_categorical_micro_results_re, echo=FALSE, message=FALSE, warning=FALSE}
+
+summary(m1_eng_cat_re)
+summary(m2_eng_cat_re)
+summary(m_wave_eng_cat_re)
+
+summary(m_eng_eq03_cat_1_re); summary(m_eng_eq03_cat_2_re)
+summary(m_eng_eq03_cat_3_re); summary(m_eng_eq03_cat_4_re)
+
+summary(m_eng_eq05_cat_1_re); summary(m_eng_eq05_cat_2_re)
+summary(m_eng_eq05_cat_3_re); summary(m_eng_eq05_cat_4_re)
+
+summary(m_risk_eng_cat_1_re); summary(m_risk_eng_cat_2_re)
+summary(m_risk_eng_cat_3_re); summary(m_risk_eng_cat_4_re)
+```
+
+```{r save_micro_models_re, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# Save RANDOM EFFECTS MICRO models with "_re" suffix
+# ============================================================
+
+micro_model_names_re <- c(
+
+  # Base (Britishness continuous)
+  "m1_re", "m2_re", "m_wave_re",
+
+  # Income (raw)
+  "m_inc_0.1_re", "m_inc_1_re", "m_inc_0.2_re", "m_inc_2_re", "m_inc_3_re", "m_inc_4_re",
+
+  # Equivalised income (0.3)
+  "m_eq03_0.1_re", "m_eq03_1_re", "m_eq03_0.2_re", "m_eq03_2_re", "m_eq03_3_re", "m_eq03_4_re",
+
+  # Equivalised income (0.5)
+  "m_eq05_0.1_re", "m_eq05_1_re", "m_eq05_0.2_re", "m_eq05_2_re", "m_eq05_3_re", "m_eq05_4_re",
+
+  # Risk (Britishness)
+  "m_risk_0.1_re", "m_risk_1_re", "m_risk_0.2_re", "m_risk_2_re", "m_risk_3_re", "m_risk_4_re",
+
+  # Diagnostics
+  "m_brit_risk_noage_re", "m_brit_risk_re",
+
+  # Britishness categorical base
+  "m1_cat_re", "m2_cat_re", "m_wave_cat_re",
+
+  # Britishness categorical × income
+  "m_inc_cat_1_re", "m_inc_cat_2_re", "m_inc_cat_3_re", "m_inc_cat_4_re",
+  "m_eq03_cat_1_re", "m_eq03_cat_2_re", "m_eq03_cat_3_re", "m_eq03_cat_4_re",
+  "m_eq05_cat_1_re", "m_eq05_cat_2_re", "m_eq05_cat_3_re", "m_eq05_cat_4_re",
+
+  # Britishness categorical × risk
+  "m_risk_cat_1_re", "m_risk_cat_2_re", "m_risk_cat_3_re", "m_risk_cat_4_re",
+
+  # Englishness continuous base
+  "m1_eng_re", "m2_eng_re", "m_wave_eng_re",
+
+  # Englishness × eq income (0.3)
+  "m_eng_eq03_0.1_re", "m_eng_eq03_1_re", "m_eng_eq03_0.2_re",
+  "m_eng_eq03_2_re", "m_eng_eq03_3_re", "m_eng_eq03_4_re",
+
+  # Englishness × eq income (0.5)
+  "m_eng_eq05_0.1_re", "m_eng_eq05_1_re", "m_eng_eq05_0.2_re",
+  "m_eng_eq05_2_re", "m_eng_eq05_3_re", "m_eng_eq05_4_re",
+
+  # Englishness × risk
+  "m_risk_eng_0.1_re", "m_risk_eng_1_re", "m_risk_eng_0.2_re",
+  "m_risk_eng_2_re", "m_risk_eng_3_re", "m_risk_eng_4_re",
+
+  # Diagnostics Englishness
+  "m_engl_risk_noage_re", "m_engl_risk_re",
+
+  # Englishness categorical base
+  "m1_eng_cat_re", "m2_eng_cat_re", "m_wave_eng_cat_re",
+
+  # Englishness categorical × eq income
+  "m_eng_eq03_cat_1_re", "m_eng_eq03_cat_2_re", "m_eng_eq03_cat_3_re", "m_eng_eq03_cat_4_re",
+  "m_eng_eq05_cat_1_re", "m_eng_eq05_cat_2_re", "m_eng_eq05_cat_3_re", "m_eng_eq05_cat_4_re",
+
+  # Englishness categorical × risk
+  "m_risk_eng_cat_1_re", "m_risk_eng_cat_2_re", "m_risk_eng_cat_3_re", "m_risk_eng_cat_4_re"
+)
+
+missing_models_re <- micro_model_names_re[!vapply(micro_model_names_re, exists, logical(1), inherits = TRUE)]
+if(length(missing_models_re) > 0){
+  stop(
+    "These RE model objects were NOT found in the environment:\n- ",
+    paste(missing_models_re, collapse = "\n- ")
+  )
+}
+
+suffix_models <- function(obj_names, suffix = "_re"){
+  objs <- mget(obj_names, inherits = TRUE)
+  names(objs) <- paste0(obj_names, suffix)
+  objs
+}
+
+models_re_all <- suffix_models(micro_model_names_re, "_re")
+
+out_dir_re <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/models_micro_re"
+dir.create(out_dir_re, recursive = TRUE, showWarnings = FALSE)
+
+saveRDS(models_re_all, file.path(out_dir_re, "models_micro_re_all.rds"))
+
+# Thematic sub-lists
+saveRDS(suffix_models(c("m1_re","m2_re","m_wave_re"), "_re"),
+        file.path(out_dir_re, "models_re_base.rds"))
+
+saveRDS(suffix_models(c("m_inc_0.1_re","m_inc_1_re","m_inc_0.2_re","m_inc_2_re","m_inc_3_re","m_inc_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_income_raw.rds"))
+
+saveRDS(suffix_models(c("m_eq03_0.1_re","m_eq03_1_re","m_eq03_0.2_re","m_eq03_2_re","m_eq03_3_re","m_eq03_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_income_eq03.rds"))
+
+saveRDS(suffix_models(c("m_eq05_0.1_re","m_eq05_1_re","m_eq05_0.2_re","m_eq05_2_re","m_eq05_3_re","m_eq05_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_income_eq05.rds"))
+
+saveRDS(suffix_models(c("m_risk_0.1_re","m_risk_1_re","m_risk_0.2_re","m_risk_2_re","m_risk_3_re","m_risk_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_risk.rds"))
+
+saveRDS(suffix_models(c("m_brit_risk_noage_re","m_brit_risk_re","m_engl_risk_noage_re","m_engl_risk_re"), "_re"),
+        file.path(out_dir_re, "models_re_diagnostics.rds"))
+
+saveRDS(suffix_models(c("m1_eng_re","m2_eng_re","m_wave_eng_re"), "_re"),
+        file.path(out_dir_re, "models_re_english_base.rds"))
+
+saveRDS(suffix_models(c("m_eng_eq03_0.1_re","m_eng_eq03_1_re","m_eng_eq03_0.2_re","m_eng_eq03_2_re","m_eng_eq03_3_re","m_eng_eq03_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_english_eq03.rds"))
+
+saveRDS(suffix_models(c("m_eng_eq05_0.1_re","m_eng_eq05_1_re","m_eng_eq05_0.2_re","m_eng_eq05_2_re","m_eng_eq05_3_re","m_eng_eq05_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_english_eq05.rds"))
+
+saveRDS(suffix_models(c("m_risk_eng_0.1_re","m_risk_eng_1_re","m_risk_eng_0.2_re","m_risk_eng_2_re","m_risk_eng_3_re","m_risk_eng_4_re"), "_re"),
+        file.path(out_dir_re, "models_re_english_risk.rds"))
+
+cat("Saved RE models to:", out_dir_re, "\n")
+cat("Total models saved:", length(models_re_all), "\n")
+```
