@@ -1229,14 +1229,230 @@ summary(m_engl_risk_engl)
 
 To further examine whether perceived unemployment risk reshapes national identity itself, I estimate respondent fixed-effects models with Englishness as the dependent variable. As in the Britishness specification, perceived unemployment risk exhibits a small but statistically significant negative association with national identification. Within individuals, increases in perceived unemployment risk are associated with marginal declines in Englishness, and this estimate remains virtually unchanged once age is included as a control. However, despite statistical precision, the substantive magnitude of the coefficient is extremely small, and the within R² is close to zero, indicating that perceived unemployment risk explains only a negligible share of within-person variation in English identification. In practical terms, short-run changes in subjective economic insecurity are not meaningfully restructuring national identity over time. This finding parallels the Britishness results and reinforces the interpretation of the immigration models: while perceived unemployment risk may correlate weakly with identity shifts, it does not operate as a powerful driver of national identification. Instead, identity remains comparatively stable, and the disappearance of the risk effect in interacted immigration models reflects limited independent explanatory power rather than strong multicollinearity or identity substitution dynamics.
 
-```{r save_micro_models, echo=FALSE, message=FALSE, warning=FALSE}
+```{r englishness_categorical_micro, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# MICRO robustness: Englishness as categorical (ref = 7)
+# ============================================================
 
+# 0) Ensure Englishness is valid (1–7) and create factor with ref = 7
+panel_self_eng <- panel_self_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_num = if_else(engl_num %in% 1:7, engl_num, NA_real_),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+# (Optional but recommended) Add engl_cat to the income/risk panels too
+# so the interacted specifications run on the exact same samples.
+panel_eng_eq03_noage <- panel_eng_eq03_noage %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq03_age <- panel_eng_eq03_age %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_noage <- panel_eng_eq05_noage %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_age <- panel_eng_eq05_age %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_noage_eng <- panel_risk_noage_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_age_eng <- panel_risk_age_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+# ============================================================
+# A) Base models (categorical Englishness; 7 = reference)
+# ============================================================
+
+m1_eng_cat <- feols(
+  dv ~ i(engl_num, ref = 7) | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+m2_eng_cat <- feols(
+  dv ~ i(engl_num, ref = 7) + age | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Flexible wave-specific categorical differences (relative to engl = 7)
+m_wave_eng_cat <- feols(
+  dv ~ i(wave, engl_num, ref = 7) | id,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# ============================================================
+# B) Equivalised income robustness (categorical Englishness)
+#     - child weight = 0.3 (eq03)
+#     - child weight = 0.5 (eq05)
+# ============================================================
+
+# --- eq03 main effects ---
+m_eng_eq03_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# --- eq03 moderation ---
+m_eng_eq03_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# --- eq05 main effects ---
+m_eng_eq05_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# --- eq05 moderation ---
+m_eng_eq05_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# ============================================================
+# C) Unemployment-risk robustness (categorical Englishness)
+# ============================================================
+
+# Risk main effects
+m_risk_eng_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# Risk moderation
+m_risk_eng_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# ============================================================
+# (Optional) Quick checks in render log
+# ============================================================
+# m1_eng_cat
+# m2_eng_cat
+# summary(m_wave_eng_cat)
+
+```
+
+```{r englishness_categorical_micro_results, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# DISPLAY: Englishness categorical MICRO results (mirror brit)
+# Assumes the models were estimated in the previous chunk.
+# ============================================================
+
+# Base models
+m1_eng_cat
+m2_eng_cat
+m_wave_eng_cat
+
+# Optional: plot wave-specific categorical differences (relative to engl = 7)
+iplot(
+  m_wave_eng_cat,
+  xlab = "Wave",
+  main = "Wave-specific difference relative to Englishness = 7"
+)
+
+# Equivalised income (child weight = 0.3)
+summary(m_eng_eq03_cat_1)
+summary(m_eng_eq03_cat_2)
+summary(m_eng_eq03_cat_3)
+summary(m_eng_eq03_cat_4)
+
+# Equivalised income (child weight = 0.5)
+summary(m_eng_eq05_cat_1)
+summary(m_eng_eq05_cat_2)
+summary(m_eng_eq05_cat_3)
+summary(m_eng_eq05_cat_4)
+
+# Unemployment risk
+summary(m_risk_eng_cat_1)
+summary(m_risk_eng_cat_2)
+summary(m_risk_eng_cat_3)
+summary(m_risk_eng_cat_4)
+
+```
+
+```{r save_micro_models, echo=FALSE, message=FALSE, warning=FALSE}
 # ============================================================
 # Save MICRO models with "_micro" suffix (to avoid name clashes
 # with meso/macro objects)
+# UPDATED: adds Englishness categorical models
 # ============================================================
 
-# 1) Define the micro model object names (as used in BES_Micro_V6)
+# 1) Define the micro model object names
 micro_model_names <- c(
 
   # --- Base models (Britishness continuous) ---
@@ -1284,7 +1500,17 @@ micro_model_names <- c(
   "m_risk_eng_2", "m_risk_eng_3", "m_risk_eng_4",
 
   # --- Diagnostic: Englishness ~ risk ---
-  "m_engl_risk_noage_engl", "m_engl_risk_engl"
+  "m_engl_risk_noage_engl", "m_engl_risk_engl",
+
+  # ==========================================================
+  # NEW: Englishness categorical (base + interactions)
+  # ==========================================================
+  "m1_eng_cat", "m2_eng_cat", "m_wave_eng_cat",
+
+  "m_eng_eq03_cat_1", "m_eng_eq03_cat_2", "m_eng_eq03_cat_3", "m_eng_eq03_cat_4",
+  "m_eng_eq05_cat_1", "m_eng_eq05_cat_2", "m_eng_eq05_cat_3", "m_eng_eq05_cat_4",
+
+  "m_risk_eng_cat_1", "m_risk_eng_cat_2", "m_risk_eng_cat_3", "m_risk_eng_cat_4"
 )
 
 # 2) Fail-fast: ensure every model exists in the environment
@@ -1366,26 +1592,52 @@ models_micro_english_risk <- suffix_models(
   "_micro"
 )
 
-# 6) Save (edit paths if you prefer a different folder)
+# NEW: Englishness categorical thematic lists
+models_micro_english_cat_base <- suffix_models(
+  c("m1_eng_cat","m2_eng_cat","m_wave_eng_cat"),
+  "_micro"
+)
+
+models_micro_english_cat_eq03 <- suffix_models(
+  c("m_eng_eq03_cat_1","m_eng_eq03_cat_2","m_eng_eq03_cat_3","m_eng_eq03_cat_4"),
+  "_micro"
+)
+
+models_micro_english_cat_eq05 <- suffix_models(
+  c("m_eng_eq05_cat_1","m_eng_eq05_cat_2","m_eng_eq05_cat_3","m_eng_eq05_cat_4"),
+  "_micro"
+)
+
+models_micro_english_cat_risk <- suffix_models(
+  c("m_risk_eng_cat_1","m_risk_eng_cat_2","m_risk_eng_cat_3","m_risk_eng_cat_4"),
+  "_micro"
+)
+
+# 6) Save
 out_dir <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/models_micro"
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-saveRDS(models_micro_all,          file.path(out_dir, "models_micro_all.rds"))
-saveRDS(models_micro_base,         file.path(out_dir, "models_micro_base.rds"))
-saveRDS(models_micro_income_raw,   file.path(out_dir, "models_micro_income_raw.rds"))
-saveRDS(models_micro_income_eq03,  file.path(out_dir, "models_micro_income_eq03.rds"))
-saveRDS(models_micro_income_eq05,  file.path(out_dir, "models_micro_income_eq05.rds"))
-saveRDS(models_micro_risk,         file.path(out_dir, "models_micro_risk.rds"))
-saveRDS(models_micro_diag,         file.path(out_dir, "models_micro_diagnostics.rds"))
-saveRDS(models_micro_cat_base,     file.path(out_dir, "models_micro_cat_base.rds"))
-saveRDS(models_micro_cat_income,   file.path(out_dir, "models_micro_cat_income.rds"))
-saveRDS(models_micro_cat_risk,     file.path(out_dir, "models_micro_cat_risk.rds"))
-saveRDS(models_micro_english_base, file.path(out_dir, "models_micro_english_base.rds"))
-saveRDS(models_micro_english_eq03, file.path(out_dir, "models_micro_english_eq03.rds"))
-saveRDS(models_micro_english_eq05, file.path(out_dir, "models_micro_english_eq05.rds"))
-saveRDS(models_micro_english_risk, file.path(out_dir, "models_micro_english_risk.rds"))
+saveRDS(models_micro_all,                file.path(out_dir, "models_micro_all.rds"))
+saveRDS(models_micro_base,               file.path(out_dir, "models_micro_base.rds"))
+saveRDS(models_micro_income_raw,         file.path(out_dir, "models_micro_income_raw.rds"))
+saveRDS(models_micro_income_eq03,        file.path(out_dir, "models_micro_income_eq03.rds"))
+saveRDS(models_micro_income_eq05,        file.path(out_dir, "models_micro_income_eq05.rds"))
+saveRDS(models_micro_risk,               file.path(out_dir, "models_micro_risk.rds"))
+saveRDS(models_micro_diag,               file.path(out_dir, "models_micro_diagnostics.rds"))
+saveRDS(models_micro_cat_base,           file.path(out_dir, "models_micro_cat_base.rds"))
+saveRDS(models_micro_cat_income,         file.path(out_dir, "models_micro_cat_income.rds"))
+saveRDS(models_micro_cat_risk,           file.path(out_dir, "models_micro_cat_risk.rds"))
+saveRDS(models_micro_english_base,       file.path(out_dir, "models_micro_english_base.rds"))
+saveRDS(models_micro_english_eq03,       file.path(out_dir, "models_micro_english_eq03.rds"))
+saveRDS(models_micro_english_eq05,       file.path(out_dir, "models_micro_english_eq05.rds"))
+saveRDS(models_micro_english_risk,       file.path(out_dir, "models_micro_english_risk.rds"))
 
-# Small confirmation in render log (not printed in document unless you want it)
+# NEW: save Englishness categorical bundles
+saveRDS(models_micro_english_cat_base,   file.path(out_dir, "models_micro_english_cat_base.rds"))
+saveRDS(models_micro_english_cat_eq03,   file.path(out_dir, "models_micro_english_cat_eq03.rds"))
+saveRDS(models_micro_english_cat_eq05,   file.path(out_dir, "models_micro_english_cat_eq05.rds"))
+saveRDS(models_micro_english_cat_risk,   file.path(out_dir, "models_micro_english_cat_risk.rds"))
+
 cat("Saved MICRO models to:", out_dir, "\n")
 cat("Total models saved:", length(models_micro_all), "\n")
 ```
