@@ -1,0 +1,826 @@
+---
+title: "BES_Macro_Random_Effects"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(lme4)      # random effects
+library(lmerTest)  # p-values for lmer
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE    <- "immigSelf"
+BRIT_BASE  <- "britishness"
+TIME_BASE  <- "starttime"
+AGE_BASE   <- "age"
+
+MACRO_GDP_BASE    <- "gdp_pc"
+MACRO_UNEMP_BASE  <- "unempl_rate"
+MACRO_CLAIM_BASE  <- "claimant_k"
+MACRO_CPIH_BASE   <- "cpih_rate"
+
+# -------------------------
+# Helpers
+# -------------------------
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+zap_if_labelled <- function(x){
+  if (inherits(x, "haven_labelled")) return(zap_labels(x))
+  x
+}
+
+# ======================================================
+# 1) Choose waves
+# ======================================================
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+
+waves_core <- Reduce(intersect, list(w_dv, w_brit, w_time))
+if(length(waves_core) < 3) stop("Too few overlapping waves across DV, britishness, and starttime.")
+
+w_age     <- waves_available(df, AGE_BASE)
+waves_age <- intersect(waves_core, w_age)
+
+w_gdp   <- waves_available(df, MACRO_GDP_BASE)
+w_unemp <- waves_available(df, MACRO_UNEMP_BASE)
+w_claim <- waves_available(df, MACRO_CLAIM_BASE)
+w_cpih  <- waves_available(df, MACRO_CPIH_BASE)
+
+waves_macro <- Reduce(intersect, list(waves_core, w_gdp, w_unemp, w_claim, w_cpih))
+if(length(waves_macro) < 3) stop("Too few overlapping waves across DV/brit/time and macro series.")
+
+# =========================================
+# 2) Build wide core dataset
+# =========================================
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves_macro),
+  paste0(BRIT_BASE, "W", waves_macro),
+  paste0(TIME_BASE, "W", waves_macro),
+  paste0(AGE_BASE,  "W", intersect(waves_macro, w_age))
+)
+
+df_core <- df %>%
+  mutate(across(any_of(core_cols), zap_if_labelled)) %>%
+  select(id, any_of(core_cols))
+
+# =========================================
+# 3) Reshape core to long
+# =========================================
+df_long_core <- df_core %>%
+  pivot_longer(
+    cols = matches(paste0("^(", DV_BASE, "|", BRIT_BASE, ")W\\d+$")),
+    names_to = c("var", "wave"),
+    names_pattern = "^(.*)W(\\d+)$",
+    values_to = "value"
+  ) %>%
+  mutate(wave = as.integer(wave)) %>%
+  pivot_wider(names_from = var, values_from = value) %>%
+  rename(dv = !!DV_BASE, brit = !!BRIT_BASE)
+
+df_long_time <- df_core %>%
+  pivot_longer(
+    cols = matches(paste0("^", TIME_BASE, "W\\d+$")),
+    names_to = "wave",
+    names_pattern = paste0("^", TIME_BASE, "W(\\d+)$"),
+    values_to = "time"
+  ) %>%
+  mutate(wave = as.integer(wave), time = as.character(time))
+
+df_long <- df_long_core %>%
+  left_join(df_long_time, by = c("id", "wave"))
+
+if(length(intersect(waves_macro, w_age)) > 0){
+  age_long <- df_core %>%
+    pivot_longer(
+      cols = matches(paste0("^", AGE_BASE, "W\\d+$")),
+      names_to = "wave",
+      names_pattern = paste0("^", AGE_BASE, "W(\\d+)$"),
+      values_to = "age"
+    ) %>%
+    mutate(wave = as.integer(wave))
+  df_long <- df_long %>% left_join(age_long, by = c("id", "wave"))
+}
+
+df_long <- df_long %>%
+  mutate(
+    time = suppressWarnings(lubridate::ymd_hms(time, quiet = TRUE)),
+    year = lubridate::year(time)
+  )
+
+# ==========================================================
+# 4) Attach macro variables
+# ==========================================================
+macro_long_from_base <- function(df, base, waves_keep){
+  cols <- paste0(base, "W", waves_keep)
+  df %>%
+    select(id, any_of(cols)) %>%
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      names_pattern = paste0("^", base, "W(\\d+)$"),
+      values_to = base
+    ) %>%
+    mutate(wave = as.integer(wave))
+}
+
+macro_gdp   <- macro_long_from_base(df, MACRO_GDP_BASE,   waves_macro)
+macro_unemp <- macro_long_from_base(df, MACRO_UNEMP_BASE, waves_macro)
+macro_claim <- macro_long_from_base(df, MACRO_CLAIM_BASE, waves_macro)
+macro_cpih  <- macro_long_from_base(df, MACRO_CPIH_BASE,  waves_macro)
+
+df_long <- df_long %>%
+  left_join(macro_gdp,   by = c("id", "wave")) %>%
+  left_join(macro_unemp, by = c("id", "wave")) %>%
+  left_join(macro_claim, by = c("id", "wave")) %>%
+  left_join(macro_cpih,  by = c("id", "wave"))
+
+# ======================================================
+# NOTE on macro RE specification:
+# Macro indicators are wave-constant (one value per wave,
+# shared across all individuals). Including both (1|wave)
+# and a wave-constant macro predictor would be collinear,
+# so macro RE models use only (1|id) and include
+# poly(wave, 3) as a fixed smooth trend to absorb
+# wave-level confounding — mirroring the FE main_0 specs.
+# The brit/engl + macro + (1|id) + (1|wave) specs are also
+# provided for the interaction models, which differ from
+# the main_0 structure.
+# ======================================================
+
+# ======================================
+# 5) RANDOM EFFECTS MODEL RUNNER — BRITISHNESS
+# ======================================
+
+# GDP
+models_gdp_re <- list(
+  main_0     = lmer(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main       = lmer(dv ~ brit + gdp_pc + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  main_age_0 = lmer(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main_age   = lmer(dv ~ brit + gdp_pc + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int        = lmer(dv ~ brit * gdp_pc + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int_age    = lmer(dv ~ brit * gdp_pc + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE)
+)
+
+# Unemployment
+models_unemp_re <- list(
+  main_0     = lmer(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main       = lmer(dv ~ brit + unempl_rate + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  main_age_0 = lmer(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main_age   = lmer(dv ~ brit + unempl_rate + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int        = lmer(dv ~ brit * unempl_rate + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int_age    = lmer(dv ~ brit * unempl_rate + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE)
+)
+
+# Claimant count
+models_claim_re <- list(
+  main_0     = lmer(dv ~ claimant_k + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main       = lmer(dv ~ brit + claimant_k + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  main_age_0 = lmer(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main_age   = lmer(dv ~ brit + claimant_k + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int        = lmer(dv ~ brit * claimant_k + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int_age    = lmer(dv ~ brit * claimant_k + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE)
+)
+
+# CPIH
+models_cpih_re <- list(
+  main_0     = lmer(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main       = lmer(dv ~ brit + cpih_rate + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  main_age_0 = lmer(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) + (1|id),
+                    data = df_long, REML = TRUE),
+  main_age   = lmer(dv ~ brit + cpih_rate + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int        = lmer(dv ~ brit * cpih_rate + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE),
+  int_age    = lmer(dv ~ brit * cpih_rate + age + (1|id) + (1|wave),
+                    data = df_long, REML = TRUE)
+)
+
+# ======================================
+# 6) Econ robustness checks — BRITISHNESS RE
+# ======================================
+brit_econ_rob_checks_re <- list(
+  brit_gdp_re         = lmer(brit ~ gdp_pc      + poly(wave, 3, raw = TRUE) + (1|id),
+                             data = df_long, REML = TRUE),
+  brit_unempl_rate_re = lmer(brit ~ unempl_rate + poly(wave, 3, raw = TRUE) + (1|id),
+                             data = df_long, REML = TRUE),
+  brit_claimant_k_re  = lmer(brit ~ claimant_k  + poly(wave, 3, raw = TRUE) + (1|id),
+                             data = df_long, REML = TRUE),
+  brit_cpih_rate_re   = lmer(brit ~ cpih_rate   + poly(wave, 3, raw = TRUE) + (1|id),
+                             data = df_long, REML = TRUE)
+)
+
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+coverage_macro <- df_long |>
+  summarise(
+    n_obs               = n(),
+    pct_gdp_nonmiss     = mean(!is.na(gdp_pc)),
+    pct_unemp_nonmiss   = mean(!is.na(unempl_rate)),
+    pct_claim_nonmiss   = mean(!is.na(claimant_k)),
+    pct_cpih_nonmiss    = mean(!is.na(cpih_rate)),
+    pct_age_nonmiss     = mean(!is.na(age))
+  )
+print(coverage_macro)
+
+macro_constancy <- df_long %>%
+  group_by(wave) %>%
+  summarise(
+    n_obs        = n(),
+    gdp_unique   = n_distinct(gdp_pc),
+    unemp_unique = n_distinct(unempl_rate),
+    claim_unique = n_distinct(claimant_k),
+    cpih_unique  = n_distinct(cpih_rate)
+  )
+print(macro_constancy)
+```
+
+TEXT HERE - TBD
+
+```{r macro_models_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(models_gdp_re$main_0);   summary(models_gdp_re$main)
+summary(models_gdp_re$main_age_0); summary(models_gdp_re$main_age)
+summary(models_gdp_re$int);       summary(models_gdp_re$int_age)
+
+summary(models_unemp_re$main_0);   summary(models_unemp_re$main)
+summary(models_unemp_re$main_age_0); summary(models_unemp_re$main_age)
+summary(models_unemp_re$int);       summary(models_unemp_re$int_age)
+
+summary(models_claim_re$main_0);   summary(models_claim_re$main)
+summary(models_claim_re$main_age_0); summary(models_claim_re$main_age)
+summary(models_claim_re$int);       summary(models_claim_re$int_age)
+
+summary(models_cpih_re$main_0);   summary(models_cpih_re$main)
+summary(models_cpih_re$main_age_0); summary(models_cpih_re$main_age)
+summary(models_cpih_re$int);       summary(models_cpih_re$int_age)
+
+summary(brit_econ_rob_checks_re$brit_gdp_re)
+summary(brit_econ_rob_checks_re$brit_unempl_rate_re)
+summary(brit_econ_rob_checks_re$brit_claimant_k_re)
+summary(brit_econ_rob_checks_re$brit_cpih_rate_re)
+```
+
+## Macro-level analysis — Random Effects {.tabset}
+
+### Results
+
+TEXT HERE - TBD
+
+#### National unemployment rate
+
+TEXT HERE - TBD
+
+#### Claimant count
+
+TEXT HERE - TBD
+
+#### GDP per capita
+
+TEXT HERE - TBD
+
+#### CPIH (consumer price inflation)
+
+TEXT HERE - TBD
+
+::: callout-note
+**Interpretive note.**\
+All macroeconomic indicators operate through the same moderation mechanism: they do not shift immigration attitudes directly, but condition how national identification translates into attitudes. The interaction effects are stable, precisely estimated, and robust across specifications.
+:::
+
+### Robustness Checks
+
+#### Britishness as Categorical
+
+```{r rob_check_brit_cat_re, include=FALSE, echo=FALSE}
+# ============================================================
+# Macro RE robustness: Britishness categorical (ref = 7)
+# ============================================================
+
+df_long <- df_long %>%
+  mutate(
+    brit_num = as.numeric(brit),
+    brit_cat = factor(brit_num, levels = 1:7) %>% relevel(ref = "7")
+  )
+
+run_macro_cat_re <- function(varname, data){
+
+  list(
+    main     = lmer(as.formula(paste0("dv ~ brit_cat + ", varname, " + (1|id) + (1|wave)")),
+                    data = data, REML = TRUE),
+    main_age = lmer(as.formula(paste0("dv ~ brit_cat + ", varname, " + age + (1|id) + (1|wave)")),
+                    data = data, REML = TRUE),
+    int      = lmer(as.formula(paste0("dv ~ brit_cat * ", varname, " + (1|id) + (1|wave)")),
+                    data = data, REML = TRUE),
+    int_age  = lmer(as.formula(paste0("dv ~ brit_cat * ", varname, " + age + (1|id) + (1|wave)")),
+                    data = data, REML = TRUE)
+  )
+}
+
+models_gdp_cat_re   <- run_macro_cat_re("gdp_pc",      df_long)
+models_unemp_cat_re <- run_macro_cat_re("unempl_rate", df_long)
+models_claim_cat_re <- run_macro_cat_re("claimant_k",  df_long)
+models_cpih_cat_re  <- run_macro_cat_re("cpih_rate",   df_long)
+```
+
+```{r macro_categorical_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(models_gdp_cat_re$main);   summary(models_gdp_cat_re$main_age)
+summary(models_gdp_cat_re$int);    summary(models_gdp_cat_re$int_age)
+
+summary(models_unemp_cat_re$main);  summary(models_unemp_cat_re$main_age)
+summary(models_unemp_cat_re$int);   summary(models_unemp_cat_re$int_age)
+
+summary(models_claim_cat_re$main);  summary(models_claim_cat_re$main_age)
+summary(models_claim_cat_re$int);   summary(models_claim_cat_re$int_age)
+
+summary(models_cpih_cat_re$main);   summary(models_cpih_cat_re$main_age)
+summary(models_cpih_cat_re$int);    summary(models_cpih_cat_re$int_age)
+```
+
+TEXT HERE - TBD
+
+```{r save_brit_models_re, echo=FALSE, include=FALSE}
+# ============================================================
+# SAVE BRITISHNESS MACRO RE MODELS — done here, before gc(),
+# so models are persisted to disk before we remove them from memory.
+# ============================================================
+
+save_path_re <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/models_re"
+if (!dir.exists(save_path_re)) dir.create(save_path_re, recursive = TRUE)
+
+# A) Britishness — Continuous
+macro_brit_continuous_re <- list(
+  gdp_main_noage_econ_macro_re   = models_gdp_re$main_0,
+  gdp_main_noage_macro_re        = models_gdp_re$main,
+  gdp_main_age_econ_macro_re     = models_gdp_re$main_age_0,
+  gdp_main_age_macro_re          = models_gdp_re$main_age,
+  gdp_int_noage_macro_re         = models_gdp_re$int,
+  gdp_int_age_macro_re           = models_gdp_re$int_age,
+
+  unemp_main_noage_econ_macro_re = models_unemp_re$main_0,
+  unemp_main_noage_macro_re      = models_unemp_re$main,
+  unemp_main_age_econ_macro_re   = models_unemp_re$main_age_0,
+  unemp_main_age_macro_re        = models_unemp_re$main_age,
+  unemp_int_noage_macro_re       = models_unemp_re$int,
+  unemp_int_age_macro_re         = models_unemp_re$int_age,
+
+  claimant_main_noage_econ_macro_re = models_claim_re$main_0,
+  claimant_main_noage_macro_re      = models_claim_re$main,
+  claimant_main_age_econ_macro_re   = models_claim_re$main_age_0,
+  claimant_main_age_macro_re        = models_claim_re$main_age,
+  claimant_int_noage_macro_re       = models_claim_re$int,
+  claimant_int_age_macro_re         = models_claim_re$int_age,
+
+  cpih_main_noage_econ_macro_re  = models_cpih_re$main_0,
+  cpih_main_noage_macro_re       = models_cpih_re$main,
+  cpih_main_age_econ_macro_re    = models_cpih_re$main_age_0,
+  cpih_main_age_macro_re         = models_cpih_re$main_age,
+  cpih_int_noage_macro_re        = models_cpih_re$int,
+  cpih_int_age_macro_re          = models_cpih_re$int_age
+)
+saveRDS(macro_brit_continuous_re,
+        file.path(save_path_re, "macro_brit_continuous_re.rds"))
+
+# B) Britishness — Categorical
+macro_brit_categorical_re <- list(
+  gdp_main_noage_cat_macro_re    = models_gdp_cat_re$main,
+  gdp_main_age_cat_macro_re      = models_gdp_cat_re$main_age,
+  gdp_int_noage_cat_macro_re     = models_gdp_cat_re$int,
+  gdp_int_age_cat_macro_re       = models_gdp_cat_re$int_age,
+
+  unemp_main_noage_cat_macro_re  = models_unemp_cat_re$main,
+  unemp_main_age_cat_macro_re    = models_unemp_cat_re$main_age,
+  unemp_int_noage_cat_macro_re   = models_unemp_cat_re$int,
+  unemp_int_age_cat_macro_re     = models_unemp_cat_re$int_age,
+
+  claimant_main_noage_cat_macro_re = models_claim_cat_re$main,
+  claimant_main_age_cat_macro_re   = models_claim_cat_re$main_age,
+  claimant_int_noage_cat_macro_re  = models_claim_cat_re$int,
+  claimant_int_age_cat_macro_re    = models_claim_cat_re$int_age,
+
+  cpih_main_noage_cat_macro_re   = models_cpih_cat_re$main,
+  cpih_main_age_cat_macro_re     = models_cpih_cat_re$main_age,
+  cpih_int_noage_cat_macro_re    = models_cpih_cat_re$int,
+  cpih_int_age_cat_macro_re      = models_cpih_cat_re$int_age
+)
+saveRDS(macro_brit_categorical_re,
+        file.path(save_path_re, "macro_brit_categorical_re.rds"))
+
+# Britishness identity robustness
+macro_identity_brit_robustness_re <- list(
+  brit_gdp_macro_re      = brit_econ_rob_checks_re$brit_gdp_re,
+  brit_unempl_macro_re   = brit_econ_rob_checks_re$brit_unempl_rate_re,
+  brit_claimant_macro_re = brit_econ_rob_checks_re$brit_claimant_k_re,
+  brit_cpih_macro_re     = brit_econ_rob_checks_re$brit_cpih_rate_re
+)
+saveRDS(macro_identity_brit_robustness_re,
+        file.path(save_path_re, "macro_identity_brit_robustness_re.rds"))
+
+cat("Saved Britishness MACRO RE models to:", save_path_re, "\n")
+```
+
+```{r gc_before_englishness, include=FALSE, echo=FALSE}
+# ============================================================
+# Free memory before building the Englishness long panel.
+# lmer objects are much heavier than feols objects; by this
+# point the session holds ~24 Britishness models + several
+# large intermediate data frames. We drop what is no longer
+# needed and run gc() twice to actually release the memory.
+# ============================================================
+
+# Drop the large intermediate Britishness data frames
+rm(df_core, df_long_core, df_long_time, age_long,
+   macro_gdp, macro_unemp, macro_claim, macro_cpih)
+
+# Drop all Britishness lmer model lists (already saved / printed)
+rm(models_gdp_re, models_unemp_re, models_claim_re, models_cpih_re,
+   models_gdp_cat_re, models_unemp_cat_re, models_claim_cat_re, models_cpih_cat_re,
+   brit_econ_rob_checks_re)
+
+# Drop the main Britishness long panel (large; no longer needed)
+rm(df_long)
+
+# Force garbage collection twice to return memory to the OS
+invisible(gc(verbose = FALSE)); invisible(gc(verbose = FALSE))
+```
+
+#### Other forms of Nationalism: Englishness
+
+```{r engl_panel_build, include=FALSE, echo=FALSE}
+# ============================================================
+# Build the Englishness long panel (data only, no models yet)
+# ============================================================
+
+DV_BASE    <- "immigSelf"
+ENG_BASE   <- "englishness"
+TIME_BASE  <- "starttime"
+AGE_BASE   <- "age"
+
+MACRO_GDP_BASE    <- "gdp_pc"
+MACRO_UNEMP_BASE  <- "unempl_rate"
+MACRO_CLAIM_BASE  <- "claimant_k"
+MACRO_CPIH_BASE   <- "cpih_rate"
+
+w_dv_eng   <- waves_available(df, DV_BASE)
+w_eng      <- waves_available(df, ENG_BASE)
+w_time_eng <- waves_available(df, TIME_BASE)
+
+waves_core_eng <- Reduce(intersect, list(w_dv_eng, w_eng, w_time_eng))
+if(length(waves_core_eng) < 3) stop("Too few overlapping waves.")
+
+w_age_eng     <- waves_available(df, AGE_BASE)
+waves_age_eng <- intersect(waves_core_eng, w_age_eng)
+
+w_gdp_eng   <- waves_available(df, MACRO_GDP_BASE)
+w_unemp_eng <- waves_available(df, MACRO_UNEMP_BASE)
+w_claim_eng <- waves_available(df, MACRO_CLAIM_BASE)
+w_cpih_eng  <- waves_available(df, MACRO_CPIH_BASE)
+
+waves_macro_eng <- Reduce(intersect,
+  list(waves_core_eng, w_gdp_eng, w_unemp_eng, w_claim_eng, w_cpih_eng))
+if(length(waves_macro_eng) < 3) stop("Too few overlapping waves for macro+englishness.")
+
+core_cols_eng <- c(
+  paste0(DV_BASE,   "W", waves_macro_eng),
+  paste0(ENG_BASE,  "W", waves_macro_eng),
+  paste0(TIME_BASE, "W", waves_macro_eng),
+  paste0(AGE_BASE,  "W", intersect(waves_macro_eng, w_age_eng))
+)
+
+df_core_eng <- df %>%
+  mutate(across(any_of(core_cols_eng), zap_if_labelled)) %>%
+  select(id, any_of(core_cols_eng))
+
+df_long_core_eng <- df_core_eng %>%
+  pivot_longer(
+    cols = matches(paste0("^(", DV_BASE, "|", ENG_BASE, ")W\\d+$")),
+    names_to = c("var", "wave"), names_pattern = "^(.*)W(\\d+)$",
+    values_to = "value"
+  ) %>%
+  mutate(wave = as.integer(wave)) %>%
+  pivot_wider(names_from = var, values_from = value) %>%
+  rename(dv = !!DV_BASE, engl = !!ENG_BASE)
+
+df_long_time_eng <- df_core_eng %>%
+  pivot_longer(
+    cols = matches(paste0("^", TIME_BASE, "W\\d+$")),
+    names_to = "wave", names_pattern = paste0("^", TIME_BASE, "W(\\d+)$"),
+    values_to = "time"
+  ) %>%
+  mutate(wave = as.integer(wave), time = as.character(time))
+
+df_long_eng <- df_long_core_eng %>%
+  left_join(df_long_time_eng, by = c("id", "wave"))
+
+if(length(intersect(waves_macro_eng, w_age_eng)) > 0){
+  age_long_eng <- df_core_eng %>%
+    pivot_longer(
+      cols = matches(paste0("^", AGE_BASE, "W\\d+$")),
+      names_to = "wave", names_pattern = paste0("^", AGE_BASE, "W(\\d+)$"),
+      values_to = "age"
+    ) %>%
+    mutate(wave = as.integer(wave))
+  df_long_eng <- df_long_eng %>% left_join(age_long_eng, by = c("id", "wave"))
+  rm(age_long_eng)
+}
+
+# Drop now-unneeded intermediates immediately
+rm(df_core_eng, df_long_core_eng, df_long_time_eng)
+invisible(gc(verbose = FALSE))
+
+macro_long_from_base_eng <- function(df, base, waves_keep){
+  cols <- paste0(base, "W", waves_keep)
+  df %>%
+    select(id, any_of(cols)) %>%
+    pivot_longer(cols = -id, names_to = "wave",
+                 names_pattern = paste0("^", base, "W(\\d+)$"),
+                 values_to = base) %>%
+    mutate(wave = as.integer(wave))
+}
+
+df_long_eng <- df_long_eng %>%
+  mutate(
+    time = suppressWarnings(lubridate::ymd_hms(as.character(time), quiet = TRUE)),
+    year = lubridate::year(time),
+    dv   = as.numeric(dv),
+    engl = as.numeric(engl),
+    age  = as.numeric(age),
+    engl = dplyr::na_if(engl, 9999)
+  ) %>%
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave)) %>%
+  left_join(macro_long_from_base_eng(df, MACRO_GDP_BASE,   waves_macro_eng), by = c("id","wave")) %>%
+  left_join(macro_long_from_base_eng(df, MACRO_UNEMP_BASE, waves_macro_eng), by = c("id","wave")) %>%
+  left_join(macro_long_from_base_eng(df, MACRO_CLAIM_BASE, waves_macro_eng), by = c("id","wave")) %>%
+  left_join(macro_long_from_base_eng(df, MACRO_CPIH_BASE,  waves_macro_eng), by = c("id","wave")) %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  )
+
+stopifnot(all(c("dv","engl","wave","id") %in% names(df_long_eng)))
+invisible(gc(verbose = FALSE))
+```
+
+```{r engl_gdp_re, include=FALSE, echo=FALSE}
+# GDP — continuous + categorical + econ robustness
+models_gdp_eng_re <- list(
+  main_0     = lmer(dv ~ gdp_pc + poly(wave, 3, raw = TRUE) + (1|id),        data = df_long_eng, REML = TRUE),
+  main       = lmer(dv ~ engl + gdp_pc + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  main_age_0 = lmer(dv ~ gdp_pc + age + poly(wave, 3, raw = TRUE) + (1|id),  data = df_long_eng, REML = TRUE),
+  main_age   = lmer(dv ~ engl + gdp_pc + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE),
+  int        = lmer(dv ~ engl * gdp_pc + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  int_age    = lmer(dv ~ engl * gdp_pc + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE)
+)
+
+models_gdp_eng_cat_re <- list(
+  main     = lmer(dv ~ engl_cat + gdp_pc + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  main_age = lmer(dv ~ engl_cat + gdp_pc + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE),
+  int      = lmer(dv ~ engl_cat * gdp_pc + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  int_age  = lmer(dv ~ engl_cat * gdp_pc + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE)
+)
+
+engl_rob_gdp_re <- lmer(engl ~ gdp_pc + poly(wave, 3, raw = TRUE) + (1|id),
+                         data = df_long_eng, REML = TRUE)
+
+invisible(gc(verbose = FALSE))
+```
+
+```{r engl_unemp_re, include=FALSE, echo=FALSE}
+# Unemployment — continuous + categorical + econ robustness
+models_unemp_eng_re <- list(
+  main_0     = lmer(dv ~ unempl_rate + poly(wave, 3, raw = TRUE) + (1|id),        data = df_long_eng, REML = TRUE),
+  main       = lmer(dv ~ engl + unempl_rate + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  main_age_0 = lmer(dv ~ unempl_rate + age + poly(wave, 3, raw = TRUE) + (1|id),  data = df_long_eng, REML = TRUE),
+  main_age   = lmer(dv ~ engl + unempl_rate + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE),
+  int        = lmer(dv ~ engl * unempl_rate + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  int_age    = lmer(dv ~ engl * unempl_rate + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE)
+)
+
+models_unemp_eng_cat_re <- list(
+  main     = lmer(dv ~ engl_cat + unempl_rate + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  main_age = lmer(dv ~ engl_cat + unempl_rate + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE),
+  int      = lmer(dv ~ engl_cat * unempl_rate + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  int_age  = lmer(dv ~ engl_cat * unempl_rate + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE)
+)
+
+engl_rob_unemp_re <- lmer(engl ~ unempl_rate + poly(wave, 3, raw = TRUE) + (1|id),
+                           data = df_long_eng, REML = TRUE)
+
+invisible(gc(verbose = FALSE))
+```
+
+```{r engl_claim_re, include=FALSE, echo=FALSE}
+# Claimant count — continuous + categorical + econ robustness
+models_claim_eng_re <- list(
+  main_0     = lmer(dv ~ claimant_k + poly(wave, 3, raw = TRUE) + (1|id),        data = df_long_eng, REML = TRUE),
+  main       = lmer(dv ~ engl + claimant_k + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  main_age_0 = lmer(dv ~ claimant_k + age + poly(wave, 3, raw = TRUE) + (1|id),  data = df_long_eng, REML = TRUE),
+  main_age   = lmer(dv ~ engl + claimant_k + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE),
+  int        = lmer(dv ~ engl * claimant_k + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  int_age    = lmer(dv ~ engl * claimant_k + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE)
+)
+
+models_claim_eng_cat_re <- list(
+  main     = lmer(dv ~ engl_cat + claimant_k + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  main_age = lmer(dv ~ engl_cat + claimant_k + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE),
+  int      = lmer(dv ~ engl_cat * claimant_k + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  int_age  = lmer(dv ~ engl_cat * claimant_k + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE)
+)
+
+engl_rob_claim_re <- lmer(engl ~ claimant_k + poly(wave, 3, raw = TRUE) + (1|id),
+                           data = df_long_eng, REML = TRUE)
+
+invisible(gc(verbose = FALSE))
+```
+
+```{r engl_cpih_re, include=FALSE, echo=FALSE}
+# CPIH — continuous + categorical + econ robustness
+models_cpih_eng_re <- list(
+  main_0     = lmer(dv ~ cpih_rate + poly(wave, 3, raw = TRUE) + (1|id),        data = df_long_eng, REML = TRUE),
+  main       = lmer(dv ~ engl + cpih_rate + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  main_age_0 = lmer(dv ~ cpih_rate + age + poly(wave, 3, raw = TRUE) + (1|id),  data = df_long_eng, REML = TRUE),
+  main_age   = lmer(dv ~ engl + cpih_rate + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE),
+  int        = lmer(dv ~ engl * cpih_rate + (1|id) + (1|wave),                  data = df_long_eng, REML = TRUE),
+  int_age    = lmer(dv ~ engl * cpih_rate + age + (1|id) + (1|wave),            data = df_long_eng, REML = TRUE)
+)
+
+models_cpih_eng_cat_re <- list(
+  main     = lmer(dv ~ engl_cat + cpih_rate + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  main_age = lmer(dv ~ engl_cat + cpih_rate + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE),
+  int      = lmer(dv ~ engl_cat * cpih_rate + (1|id) + (1|wave),          data = df_long_eng, REML = TRUE),
+  int_age  = lmer(dv ~ engl_cat * cpih_rate + age + (1|id) + (1|wave),    data = df_long_eng, REML = TRUE)
+)
+
+engl_rob_cpih_re <- lmer(engl ~ cpih_rate + poly(wave, 3, raw = TRUE) + (1|id),
+                          data = df_long_eng, REML = TRUE)
+
+# Bundle econ robustness checks for consistency with save chunk
+engl_econ_rob_checks_re <- list(
+  engl_gdp_re         = engl_rob_gdp_re,
+  engl_unempl_rate_re = engl_rob_unemp_re,
+  engl_claimant_k_re  = engl_rob_claim_re,
+  engl_cpih_rate_re   = engl_rob_cpih_re
+)
+
+invisible(gc(verbose = FALSE))
+```
+
+TEXT HERE - TBD
+
+```{r macro_englishness_summaries_re, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Englishness continuous
+summary(models_gdp_eng_re$main_0);    summary(models_gdp_eng_re$main)
+summary(models_gdp_eng_re$main_age_0); summary(models_gdp_eng_re$main_age)
+summary(models_gdp_eng_re$int);        summary(models_gdp_eng_re$int_age)
+
+summary(models_unemp_eng_re$main_0);    summary(models_unemp_eng_re$main)
+summary(models_unemp_eng_re$main_age_0); summary(models_unemp_eng_re$main_age)
+summary(models_unemp_eng_re$int);        summary(models_unemp_eng_re$int_age)
+
+summary(models_claim_eng_re$main_0);    summary(models_claim_eng_re$main)
+summary(models_claim_eng_re$main_age_0); summary(models_claim_eng_re$main_age)
+summary(models_claim_eng_re$int);        summary(models_claim_eng_re$int_age)
+
+summary(models_cpih_eng_re$main_0);    summary(models_cpih_eng_re$main)
+summary(models_cpih_eng_re$main_age_0); summary(models_cpih_eng_re$main_age)
+summary(models_cpih_eng_re$int);        summary(models_cpih_eng_re$int_age)
+
+# Englishness categorical
+summary(models_gdp_eng_cat_re$main);   summary(models_gdp_eng_cat_re$main_age)
+summary(models_gdp_eng_cat_re$int);    summary(models_gdp_eng_cat_re$int_age)
+
+summary(models_unemp_eng_cat_re$main);  summary(models_unemp_eng_cat_re$main_age)
+summary(models_unemp_eng_cat_re$int);   summary(models_unemp_eng_cat_re$int_age)
+
+summary(models_claim_eng_cat_re$main);  summary(models_claim_eng_cat_re$main_age)
+summary(models_claim_eng_cat_re$int);   summary(models_claim_eng_cat_re$int_age)
+
+summary(models_cpih_eng_cat_re$main);   summary(models_cpih_eng_cat_re$main_age)
+summary(models_cpih_eng_cat_re$int);    summary(models_cpih_eng_cat_re$int_age)
+
+# Econ robustness
+summary(engl_econ_rob_checks_re$engl_gdp_re)
+summary(engl_econ_rob_checks_re$engl_unempl_rate_re)
+summary(engl_econ_rob_checks_re$engl_claimant_k_re)
+summary(engl_econ_rob_checks_re$engl_cpih_rate_re)
+```
+
+TEXT HERE - TBD
+
+```{r save_engl_models_re, echo=FALSE, include=FALSE}
+# ============================================================
+# SAVE ENGLISHNESS + IDENTITY ROBUSTNESS MACRO RE MODELS
+# Britishness models were already saved in save_brit_models_re
+# (before memory cleanup). We save Englishness separately here.
+# ============================================================
+
+save_path_re <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/models_re"
+if (!dir.exists(save_path_re)) dir.create(save_path_re, recursive = TRUE)
+
+# C) Englishness — Continuous
+macro_engl_continuous_re <- list(
+  gdp_main_noage_engl_econ_macro_re = models_gdp_eng_re$main_0,
+  gdp_main_noage_engl_macro_re      = models_gdp_eng_re$main,
+  gdp_main_age_engl_econ_macro_re   = models_gdp_eng_re$main_age_0,
+  gdp_main_age_engl_macro_re        = models_gdp_eng_re$main_age,
+  gdp_int_noage_engl_macro_re       = models_gdp_eng_re$int,
+  gdp_int_age_engl_macro_re         = models_gdp_eng_re$int_age,
+
+  unemp_main_noage_engl_econ_macro_re = models_unemp_eng_re$main_0,
+  unemp_main_noage_engl_macro_re      = models_unemp_eng_re$main,
+  unemp_main_age_engl_econ_macro_re   = models_unemp_eng_re$main_age_0,
+  unemp_main_age_engl_macro_re        = models_unemp_eng_re$main_age,
+  unemp_int_noage_engl_macro_re       = models_unemp_eng_re$int,
+  unemp_int_age_engl_macro_re         = models_unemp_eng_re$int_age,
+
+  claimant_main_noage_engl_econ_macro_re = models_claim_eng_re$main_0,
+  claimant_main_noage_engl_macro_re      = models_claim_eng_re$main,
+  claimant_main_age_engl_econ_macro_re   = models_claim_eng_re$main_age_0,
+  claimant_main_age_engl_macro_re        = models_claim_eng_re$main_age,
+  claimant_int_noage_engl_macro_re       = models_claim_eng_re$int,
+  claimant_int_age_engl_macro_re         = models_claim_eng_re$int_age,
+
+  cpih_main_noage_engl_econ_macro_re = models_cpih_eng_re$main_0,
+  cpih_main_noage_engl_macro_re      = models_cpih_eng_re$main,
+  cpih_main_age_engl_econ_macro_re   = models_cpih_eng_re$main_age_0,
+  cpih_main_age_engl_macro_re        = models_cpih_eng_re$main_age,
+  cpih_int_noage_engl_macro_re       = models_cpih_eng_re$int,
+  cpih_int_age_engl_macro_re         = models_cpih_eng_re$int_age
+)
+saveRDS(macro_engl_continuous_re,
+        file.path(save_path_re, "macro_engl_continuous_re.rds"))
+
+# D) Englishness — Categorical
+macro_engl_categorical_re <- list(
+  gdp_main_noage_engl_cat_macro_re   = models_gdp_eng_cat_re$main,
+  gdp_main_age_engl_cat_macro_re     = models_gdp_eng_cat_re$main_age,
+  gdp_int_noage_engl_cat_macro_re    = models_gdp_eng_cat_re$int,
+  gdp_int_age_engl_cat_macro_re      = models_gdp_eng_cat_re$int_age,
+
+  unemp_main_noage_engl_cat_macro_re = models_unemp_eng_cat_re$main,
+  unemp_main_age_engl_cat_macro_re   = models_unemp_eng_cat_re$main_age,
+  unemp_int_noage_engl_cat_macro_re  = models_unemp_eng_cat_re$int,
+  unemp_int_age_engl_cat_macro_re    = models_unemp_eng_cat_re$int_age,
+
+  claimant_main_noage_engl_cat_macro_re = models_claim_eng_cat_re$main,
+  claimant_main_age_engl_cat_macro_re   = models_claim_eng_cat_re$main_age,
+  claimant_int_noage_engl_cat_macro_re  = models_claim_eng_cat_re$int,
+  claimant_int_age_engl_cat_macro_re    = models_claim_eng_cat_re$int_age,
+
+  cpih_main_noage_engl_cat_macro_re  = models_cpih_eng_cat_re$main,
+  cpih_main_age_engl_cat_macro_re    = models_cpih_eng_cat_re$main_age,
+  cpih_int_noage_engl_cat_macro_re   = models_cpih_eng_cat_re$int,
+  cpih_int_age_engl_cat_macro_re     = models_cpih_eng_cat_re$int_age
+)
+saveRDS(macro_engl_categorical_re,
+        file.path(save_path_re, "macro_engl_categorical_re.rds"))
+
+# E) Economic identity robustness (Englishness only; Britishness saved earlier)
+macro_identity_engl_robustness_re <- list(
+  engl_gdp_macro_re      = engl_econ_rob_checks_re$engl_gdp_re,
+  engl_unempl_macro_re   = engl_econ_rob_checks_re$engl_unempl_rate_re,
+  engl_claimant_macro_re = engl_econ_rob_checks_re$engl_claimant_k_re,
+  engl_cpih_macro_re     = engl_econ_rob_checks_re$engl_cpih_rate_re
+)
+saveRDS(macro_identity_engl_robustness_re,
+        file.path(save_path_re, "macro_identity_engl_robustness_re.rds"))
+
+cat("Saved Englishness MACRO RE models to:", save_path_re, "\n")
+```
