@@ -1,0 +1,705 @@
+---
+title: "Online Appendix B.8: Meso-Level Models — Cultural Immigration Attitudes"
+subtitle: "Constituency-Level Economic Context, National Identity, and Cultural Immigration Attitudes"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+library(modelsummary)
+library(kableExtra)
+
+options(modelsummary_factory_default = "kableExtra")
+
+GOF_MAP <- tribble(
+  ~raw,                  ~clean,          ~fmt,
+  "nobs",                "Observations",  0,
+  "FE: id",              "Individual FE", 0,
+  "FE: wave",            "Wave FE",       0,
+  "adj.r.squared",       "Adj. R²",       3,
+  "within.r.squared",    "Within R²",     6,
+  "rmse",                "RMSE",          3
+)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE          <- "immigCultural"
+BRIT_BASE        <- "britishness"
+ENG_BASE         <- "englishness"
+TIME_BASE        <- "starttime"
+AGE_BASE         <- "age"
+MESO_UNEMP_BASE  <- "unemp_rate_mean"
+MESO_CLAIM_BASE  <- "claimant_mean"
+MESO_INCOME_BASE <- "income"
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+make_meso_long <- function(df, base, out_name, waves_keep) {
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if (length(cols) == 0) return(NULL)
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+  if (nrow(tmp) == 0) return(NULL)
+  use_cols <- tmp$col
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols),
+                  ~ as.numeric(if (inherits(.x, "haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(cols = -id, names_to = "wave", values_to = out_name,
+                 names_pattern = paste0("^", base, "W(\\d+)$")) |>
+    mutate(wave = as.integer(wave))
+}
+```
+
+```{r build-panels-brit, include=FALSE}
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+w_age  <- waves_available(df, AGE_BASE)
+
+waves     <- Reduce(intersect, list(w_dv, w_brit, w_time))
+waves_age <- intersect(waves, w_age)
+
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(BRIT_BASE, "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age)
+)
+
+panel_long <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x; if (inherits(x, "haven_labelled")) x <- zap_labels(x); x
+  })) |>
+  select(id, any_of(core_cols)) |>
+  pivot_longer(cols = -id, names_to = c(".value", "wave"),
+               names_pattern = "(.+)W(\\d+)$") |>
+  mutate(
+    wave             = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed,
+                                suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(dv = all_of(DV_BASE), brit = all_of(BRIT_BASE), age = all_of(AGE_BASE)) |>
+  mutate(dv = as.numeric(dv), brit = as.numeric(brit), age = as.numeric(age)) |>
+  filter(!is.na(dv), !is.na(brit), !is.na(wave))
+
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves)
+
+panel_meso <- panel_long
+if (!is.null(meso_unemp))  panel_meso <- left_join(panel_meso, meso_unemp,  by = c("id", "wave"))
+if (!is.null(meso_claim))  panel_meso <- left_join(panel_meso, meso_claim,  by = c("id", "wave"))
+if (!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = c("id", "wave"))
+
+panel_meso_cat <- panel_meso |>
+  mutate(brit = as.numeric(haven::zap_labels(brit)),
+         age  = as.numeric(haven::zap_labels(age)),
+         dv   = as.numeric(haven::zap_labels(dv))) |>
+  filter(!is.na(dv), !is.na(brit), brit %in% 1:7, !is.na(wave))
+```
+
+```{r build-panels-engl, include=FALSE}
+w_eng      <- waves_available(df, ENG_BASE)
+waves_eng  <- Reduce(intersect, list(w_dv, w_eng, w_time))
+waves_eng_age <- intersect(waves_eng, w_age)
+
+core_cols_eng <- c(
+  paste0(DV_BASE,  "W", waves_eng),
+  paste0(ENG_BASE, "W", waves_eng),
+  paste0(TIME_BASE,"W", waves_eng),
+  paste0(AGE_BASE, "W", waves_eng_age)
+)
+
+panel_long_eng <- df |>
+  mutate(across(any_of(core_cols_eng), ~ {
+    x <- .x; if (inherits(x, "haven_labelled")) x <- zap_labels(x); x
+  })) |>
+  select(id, any_of(core_cols_eng)) |>
+  pivot_longer(cols = -id, names_to = c(".value", "wave"),
+               names_pattern = "(.+)W(\\d+)$") |>
+  mutate(
+    wave             = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed,
+                                suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(dv = all_of(DV_BASE), engl = all_of(ENG_BASE), age = all_of(AGE_BASE)) |>
+  mutate(dv   = as.numeric(dv),
+         engl = as.numeric(engl),
+         age  = as.numeric(age),
+         engl = dplyr::na_if(engl, 9999)) |>
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave))
+
+meso_unemp_eng  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_mean", waves_eng)
+meso_claim_eng  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_mean",   waves_eng)
+meso_income_eng <- make_meso_long(df, MESO_INCOME_BASE, "income_meso",     waves_eng)
+
+panel_meso_eng <- panel_long_eng
+if (!is.null(meso_unemp_eng))  panel_meso_eng <- left_join(panel_meso_eng, meso_unemp_eng,  by = c("id", "wave"))
+if (!is.null(meso_claim_eng))  panel_meso_eng <- left_join(panel_meso_eng, meso_claim_eng,  by = c("id", "wave"))
+if (!is.null(meso_income_eng)) panel_meso_eng <- left_join(panel_meso_eng, meso_income_eng, by = c("id", "wave"))
+
+panel_meso_eng_cat <- panel_meso_eng |>
+  mutate(engl = as.numeric(if (inherits(engl, "haven_labelled")) haven::zap_labels(engl) else engl),
+         age  = as.numeric(if (inherits(age,  "haven_labelled")) haven::zap_labels(age)  else age),
+         dv   = as.numeric(if (inherits(dv,   "haven_labelled")) haven::zap_labels(dv)   else dv),
+         engl = dplyr::na_if(engl, 9999)) |>
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave))
+```
+
+```{r estimate-brit, include=FALSE}
+panel_u <- panel_meso     |> filter(!is.na(unemp_rate_mean))
+panel_c <- panel_meso     |> filter(!is.na(claimant_mean))
+panel_i <- panel_meso     |> filter(!is.na(income_meso))
+
+m_u0.1 <- feols(dv ~ unemp_rate_mean             | id + wave, data = panel_u, cluster = "id")
+m_u1   <- feols(dv ~ brit + unemp_rate_mean       | id + wave, data = panel_u, cluster = "id")
+m_u0.2 <- feols(dv ~ unemp_rate_mean + age        | id + wave, data = panel_u, cluster = "id")
+m_u2   <- feols(dv ~ brit + unemp_rate_mean + age | id + wave, data = panel_u, cluster = "id")
+m_u3   <- feols(dv ~ brit * unemp_rate_mean       | id + wave, data = panel_u, cluster = "id")
+m_u4   <- feols(dv ~ brit * unemp_rate_mean + age | id + wave, data = panel_u, cluster = "id")
+
+m_c0.1 <- feols(dv ~ claimant_mean               | id + wave, data = panel_c, cluster = "id")
+m_c1   <- feols(dv ~ brit + claimant_mean         | id + wave, data = panel_c, cluster = "id")
+m_c0.2 <- feols(dv ~ claimant_mean + age          | id + wave, data = panel_c, cluster = "id")
+m_c2   <- feols(dv ~ brit + claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
+m_c3   <- feols(dv ~ brit * claimant_mean         | id + wave, data = panel_c, cluster = "id")
+m_c4   <- feols(dv ~ brit * claimant_mean + age   | id + wave, data = panel_c, cluster = "id")
+
+m_i0.1 <- feols(dv ~ income_meso                 | id + wave, data = panel_i, cluster = "id")
+m_i1   <- feols(dv ~ brit + income_meso           | id + wave, data = panel_i, cluster = "id")
+m_i0.2 <- feols(dv ~ income_meso + age            | id + wave, data = panel_i, cluster = "id")
+m_i2   <- feols(dv ~ brit + income_meso + age     | id + wave, data = panel_i, cluster = "id")
+m_i3   <- feols(dv ~ brit * income_meso           | id + wave, data = panel_i, cluster = "id")
+m_i4   <- feols(dv ~ brit * income_meso + age     | id + wave, data = panel_i, cluster = "id")
+```
+
+```{r estimate-brit-cat, include=FALSE}
+panel_u_cat <- panel_meso_cat |> filter(!is.na(unemp_rate_mean))
+panel_c_cat <- panel_meso_cat |> filter(!is.na(claimant_mean))
+panel_i_cat <- panel_meso_cat |> filter(!is.na(income_meso))
+
+m_u1_cat <- feols(dv ~ i(brit, ref = 7) + unemp_rate_mean       | id + wave, data = panel_u_cat, cluster = "id")
+m_u2_cat <- feols(dv ~ i(brit, ref = 7) + unemp_rate_mean + age | id + wave, data = panel_u_cat, cluster = "id")
+m_u3_cat <- feols(dv ~ i(brit, ref = 7) * unemp_rate_mean       | id + wave, data = panel_u_cat, cluster = "id")
+m_u4_cat <- feols(dv ~ i(brit, ref = 7) * unemp_rate_mean + age | id + wave, data = panel_u_cat, cluster = "id")
+
+m_c1_cat <- feols(dv ~ i(brit, ref = 7) + claimant_mean         | id + wave, data = panel_c_cat, cluster = "id")
+m_c2_cat <- feols(dv ~ i(brit, ref = 7) + claimant_mean + age   | id + wave, data = panel_c_cat, cluster = "id")
+m_c3_cat <- feols(dv ~ i(brit, ref = 7) * claimant_mean         | id + wave, data = panel_c_cat, cluster = "id")
+m_c4_cat <- feols(dv ~ i(brit, ref = 7) * claimant_mean + age   | id + wave, data = panel_c_cat, cluster = "id")
+
+m_i1_cat <- feols(dv ~ i(brit, ref = 7) + income_meso           | id + wave, data = panel_i_cat, cluster = "id")
+m_i2_cat <- feols(dv ~ i(brit, ref = 7) + income_meso + age     | id + wave, data = panel_i_cat, cluster = "id")
+m_i3_cat <- feols(dv ~ i(brit, ref = 7) * income_meso           | id + wave, data = panel_i_cat, cluster = "id")
+m_i4_cat <- feols(dv ~ i(brit, ref = 7) * income_meso + age     | id + wave, data = panel_i_cat, cluster = "id")
+```
+
+```{r estimate-engl, include=FALSE}
+panel_u_eng <- panel_meso_eng |> filter(!is.na(unemp_rate_mean))
+panel_c_eng <- panel_meso_eng |> filter(!is.na(claimant_mean))
+panel_i_eng <- panel_meso_eng |> filter(!is.na(income_meso))
+
+m_u0.1_eng <- feols(dv ~ unemp_rate_mean              | id + wave, data = panel_u_eng, cluster = "id")
+m_u1_eng   <- feols(dv ~ engl + unemp_rate_mean        | id + wave, data = panel_u_eng, cluster = "id")
+m_u0.2_eng <- feols(dv ~ unemp_rate_mean + age         | id + wave, data = panel_u_eng, cluster = "id")
+m_u2_eng   <- feols(dv ~ engl + unemp_rate_mean + age  | id + wave, data = panel_u_eng, cluster = "id")
+m_u3_eng   <- feols(dv ~ engl * unemp_rate_mean        | id + wave, data = panel_u_eng, cluster = "id")
+m_u4_eng   <- feols(dv ~ engl * unemp_rate_mean + age  | id + wave, data = panel_u_eng, cluster = "id")
+
+m_c0.1_eng <- feols(dv ~ claimant_mean                 | id + wave, data = panel_c_eng, cluster = "id")
+m_c1_eng   <- feols(dv ~ engl + claimant_mean          | id + wave, data = panel_c_eng, cluster = "id")
+m_c0.2_eng <- feols(dv ~ claimant_mean + age           | id + wave, data = panel_c_eng, cluster = "id")
+m_c2_eng   <- feols(dv ~ engl + claimant_mean + age    | id + wave, data = panel_c_eng, cluster = "id")
+m_c3_eng   <- feols(dv ~ engl * claimant_mean          | id + wave, data = panel_c_eng, cluster = "id")
+m_c4_eng   <- feols(dv ~ engl * claimant_mean + age    | id + wave, data = panel_c_eng, cluster = "id")
+
+m_i0.1_eng <- feols(dv ~ income_meso                   | id + wave, data = panel_i_eng, cluster = "id")
+m_i1_eng   <- feols(dv ~ engl + income_meso            | id + wave, data = panel_i_eng, cluster = "id")
+m_i0.2_eng <- feols(dv ~ income_meso + age             | id + wave, data = panel_i_eng, cluster = "id")
+m_i2_eng   <- feols(dv ~ engl + income_meso + age      | id + wave, data = panel_i_eng, cluster = "id")
+m_i3_eng   <- feols(dv ~ engl * income_meso            | id + wave, data = panel_i_eng, cluster = "id")
+m_i4_eng   <- feols(dv ~ engl * income_meso + age      | id + wave, data = panel_i_eng, cluster = "id")
+```
+
+```{r estimate-engl-cat, include=FALSE}
+panel_u_eng_cat <- panel_meso_eng_cat |> filter(!is.na(unemp_rate_mean))
+panel_c_eng_cat <- panel_meso_eng_cat |> filter(!is.na(claimant_mean))
+panel_i_eng_cat <- panel_meso_eng_cat |> filter(!is.na(income_meso))
+
+m_u1_eng_cat <- feols(dv ~ i(engl, ref = 7) + unemp_rate_mean       | id + wave, data = panel_u_eng_cat, cluster = "id")
+m_u2_eng_cat <- feols(dv ~ i(engl, ref = 7) + unemp_rate_mean + age | id + wave, data = panel_u_eng_cat, cluster = "id")
+m_u3_eng_cat <- feols(dv ~ i(engl, ref = 7) * unemp_rate_mean       | id + wave, data = panel_u_eng_cat, cluster = "id")
+m_u4_eng_cat <- feols(dv ~ i(engl, ref = 7) * unemp_rate_mean + age | id + wave, data = panel_u_eng_cat, cluster = "id")
+
+m_c1_eng_cat <- feols(dv ~ i(engl, ref = 7) + claimant_mean         | id + wave, data = panel_c_eng_cat, cluster = "id")
+m_c2_eng_cat <- feols(dv ~ i(engl, ref = 7) + claimant_mean + age   | id + wave, data = panel_c_eng_cat, cluster = "id")
+m_c3_eng_cat <- feols(dv ~ i(engl, ref = 7) * claimant_mean         | id + wave, data = panel_c_eng_cat, cluster = "id")
+m_c4_eng_cat <- feols(dv ~ i(engl, ref = 7) * claimant_mean + age   | id + wave, data = panel_c_eng_cat, cluster = "id")
+
+m_i1_eng_cat <- feols(dv ~ i(engl, ref = 7) + income_meso           | id + wave, data = panel_i_eng_cat, cluster = "id")
+m_i2_eng_cat <- feols(dv ~ i(engl, ref = 7) + income_meso + age     | id + wave, data = panel_i_eng_cat, cluster = "id")
+m_i3_eng_cat <- feols(dv ~ i(engl, ref = 7) * income_meso           | id + wave, data = panel_i_eng_cat, cluster = "id")
+m_i4_eng_cat <- feols(dv ~ i(engl, ref = 7) * income_meso + age     | id + wave, data = panel_i_eng_cat, cluster = "id")
+```
+
+---
+
+This appendix reports the full model output supporting the meso-level analysis of cultural immigration attitudes. All models use individual and wave fixed effects with standard errors clustered at the respondent level. The outcome throughout is `immigCultural`, which asks respondents whether immigration undermines or enriches British cultural life; higher values indicate more permissive attitudes. The structure mirrors Appendix B exactly: Section B.8.1 presents the main Britishness models for all three constituency-level economic indicators; Section B.8.2 reports the categorical Britishness robustness check; Section B.8.3 presents the parallel Englishness models; and Section B.8.4 reports the categorical Englishness robustness check. A description of the meso-level variables appears in Section B.8.5.
+
+---
+
+# B.8.1 Main Models: Britishness (Continuous) {#sec-b8-brit}
+
+## B.8.1.1 Local Unemployment Rate {#sec-b8-brit-unemp}
+
+Across the baseline specifications, the local unemployment rate exhibits no statistically significant main effect on cultural immigration attitudes once individual and wave fixed effects are included. Once the interaction between unemployment and Britishness is introduced, however, a conditional pattern emerges: higher local unemployment is associated with more restrictive cultural immigration attitudes among respondents with lower Britishness, while the negative and significant interaction term indicates attenuation as national identification increases. This pattern mirrors the findings for `immigSelf` in Appendix B.1, suggesting that the contextual moderation structure holds across both the cultural and general immigration attitude dimensions.
+
+```{r b8-brit-unemp-main}
+modelsummary(
+  list(
+    "(1) Unemp only"    = m_u0.1,
+    "(2) + Britishness" = m_u1,
+    "(3) Unemp + Age"   = m_u0.2,
+    "(4) + Britishness" = m_u2
+  ),
+  coef_rename = c(brit = "Britishness", unemp_rate_mean = "Unemp. rate (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.1. Local Unemployment Rate and Cultural Immigration Attitudes: Main Effects (Britishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-brit-unemp-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_u3,
+    "(2) Interaction + Age" = m_u4
+  ),
+  coef_rename = c(brit = "Britishness", unemp_rate_mean = "Unemp. rate (local)",
+                  "brit:unemp_rate_mean" = "Britishness × Unemp. rate", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.2. Local Unemployment Rate × Britishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.1.2 Claimant Count {#sec-b8-brit-claimant}
+
+Results for claimant count closely parallel those for the unemployment rate. Main-effect specifications show no significant unconditional association with cultural immigration attitudes. In interaction models, claimant intensity becomes conditionally meaningful: higher claimant levels are associated with more restrictive cultural attitudes among respondents with lower Britishness, with the effect weakening as national identification strengthens. The consistency of this pattern across age-controlled and uncontrolled specifications reinforces the interpretation that local welfare dependency shapes cultural immigration attitudes conditionally on national identity.
+
+```{r b8-brit-claimant-main}
+modelsummary(
+  list(
+    "(1) Claimant only"  = m_c0.1,
+    "(2) + Britishness"  = m_c1,
+    "(3) Claimant + Age" = m_c0.2,
+    "(4) + Britishness"  = m_c2
+  ),
+  coef_rename = c(brit = "Britishness", claimant_mean = "Claimant count (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.3. Claimant Count and Cultural Immigration Attitudes: Main Effects (Britishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-brit-claimant-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_c3,
+    "(2) Interaction + Age" = m_c4
+  ),
+  coef_rename = c(brit = "Britishness", claimant_mean = "Claimant count (local)",
+                  "brit:claimant_mean" = "Britishness × Claimant count", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.4. Claimant Count × Britishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.1.3 Local Income (ASHE) {#sec-b8-brit-income}
+
+As in Appendix B.1, local income shows no significant main effect or meaningful interaction with Britishness in the cultural DV specifications. Neither the baseline nor the interaction models provide evidence that changes in constituency-level earnings predict within-person changes in cultural immigration attitudes. This null result is consistent across all specifications and reinforces the conclusion that the moderation pattern observed for unemployment and claimant indicators is not driven by general economic prosperity but by labour-market insecurity and welfare exposure specifically.
+
+```{r b8-brit-income-main}
+modelsummary(
+  list(
+    "(1) Income only"   = m_i0.1,
+    "(2) + Britishness" = m_i1,
+    "(3) Income + Age"  = m_i0.2,
+    "(4) + Britishness" = m_i2
+  ),
+  coef_rename = c(brit = "Britishness", income_meso = "Local income (ASHE)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.5. Local Income (ASHE) and Cultural Immigration Attitudes: Main Effects (Britishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-brit-income-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_i3,
+    "(2) Interaction + Age" = m_i4
+  ),
+  coef_rename = c(brit = "Britishness", income_meso = "Local income (ASHE)",
+                  "brit:income_meso" = "Britishness × Local income", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.6. Local Income (ASHE) × Britishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.8.2 Robustness: Britishness (Categorical) {#sec-b8-brit-cat}
+
+Re-estimating the cultural DV meso models using Britishness as a categorical variable (reference: 7) confirms the conclusions from the continuous specifications. Britishness category coefficients are positive, precisely estimated, and monotonically ordered across all three indicators. For unemployment and claimant count, categorical interaction models reveal conditional effects concentrated among weaker and intermediate identity positions, consistent with the parallel robustness checks in Appendix B.2. Local income again yields no coherent pattern of categorical interactions.
+
+## B.8.2.1 Local Unemployment Rate {#sec-b8-cat-brit-unemp}
+
+```{r b8-cat-brit-unemp-main}
+modelsummary(
+  list("(1) No age" = m_u1_cat, "(2) Age" = m_u2_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.7. Local Unemployment Rate: Britishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-brit-unemp-int}
+modelsummary(
+  list("(1) Interaction" = m_u3_cat, "(2) Interaction + Age" = m_u4_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.8. Local Unemployment Rate × Britishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.2.2 Claimant Count {#sec-b8-cat-brit-claimant}
+
+```{r b8-cat-brit-claimant-main}
+modelsummary(
+  list("(1) No age" = m_c1_cat, "(2) Age" = m_c2_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.9. Claimant Count: Britishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-brit-claimant-int}
+modelsummary(
+  list("(1) Interaction" = m_c3_cat, "(2) Interaction + Age" = m_c4_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.10. Claimant Count × Britishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.2.3 Local Income (ASHE) {#sec-b8-cat-brit-income}
+
+```{r b8-cat-brit-income-main}
+modelsummary(
+  list("(1) No age" = m_i1_cat, "(2) Age" = m_i2_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.11. Local Income (ASHE): Britishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-brit-income-int}
+modelsummary(
+  list("(1) Interaction" = m_i3_cat, "(2) Interaction + Age" = m_i4_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.12. Local Income (ASHE) × Britishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Britishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.8.3 Main Models: Englishness (Continuous) {#sec-b8-engl}
+
+The Englishness cultural DV models replicate the Britishness structure with Englishness as the identity moderator, following the same logic as Appendix B.3. For unemployment and claimant indicators, the Englishness interaction is present but somewhat attenuated relative to Britishness, consistent with the pattern documented for `immigSelf`. For local income, as in Appendix B.3, the Englishness interaction reveals a small but discernible conditional structure absent in the Britishness models, suggesting that Englishness captures a distinct channel through which constituency-level economic context shapes cultural immigration attitudes.
+
+## B.8.3.1 Local Unemployment Rate {#sec-b8-engl-unemp}
+
+```{r b8-engl-unemp-main}
+modelsummary(
+  list(
+    "(1) Unemp only"    = m_u0.1_eng,
+    "(2) + Englishness" = m_u1_eng,
+    "(3) Unemp + Age"   = m_u0.2_eng,
+    "(4) + Englishness" = m_u2_eng
+  ),
+  coef_rename = c(engl = "Englishness", unemp_rate_mean = "Unemp. rate (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.13. Local Unemployment Rate and Cultural Immigration Attitudes: Main Effects (Englishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-engl-unemp-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_u3_eng,
+    "(2) Interaction + Age" = m_u4_eng
+  ),
+  coef_rename = c(engl = "Englishness", unemp_rate_mean = "Unemp. rate (local)",
+                  "engl:unemp_rate_mean" = "Englishness × Unemp. rate", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.14. Local Unemployment Rate × Englishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.3.2 Claimant Count {#sec-b8-engl-claimant}
+
+```{r b8-engl-claimant-main}
+modelsummary(
+  list(
+    "(1) Claimant only"  = m_c0.1_eng,
+    "(2) + Englishness"  = m_c1_eng,
+    "(3) Claimant + Age" = m_c0.2_eng,
+    "(4) + Englishness"  = m_c2_eng
+  ),
+  coef_rename = c(engl = "Englishness", claimant_mean = "Claimant count (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.15. Claimant Count and Cultural Immigration Attitudes: Main Effects (Englishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-engl-claimant-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_c3_eng,
+    "(2) Interaction + Age" = m_c4_eng
+  ),
+  coef_rename = c(engl = "Englishness", claimant_mean = "Claimant count (local)",
+                  "engl:claimant_mean" = "Englishness × Claimant count", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.16. Claimant Count × Englishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.3.3 Local Income (ASHE) {#sec-b8-engl-income}
+
+```{r b8-engl-income-main}
+modelsummary(
+  list(
+    "(1) Income only"   = m_i0.1_eng,
+    "(2) + Englishness" = m_i1_eng,
+    "(3) Income + Age"  = m_i0.2_eng,
+    "(4) + Englishness" = m_i2_eng
+  ),
+  coef_rename = c(engl = "Englishness", income_meso = "Local income (ASHE)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.17. Local Income (ASHE) and Cultural Immigration Attitudes: Main Effects (Englishness)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-engl-income-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_i3_eng,
+    "(2) Interaction + Age" = m_i4_eng
+  ),
+  coef_rename = c(engl = "Englishness", income_meso = "Local income (ASHE)",
+                  "engl:income_meso" = "Englishness × Local income", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.18. Local Income (ASHE) × Englishness: Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.8.4 Robustness: Englishness (Categorical) {#sec-b8-engl-cat}
+
+Replacing continuous Englishness with a categorical specification (reference: 7) confirms the gradient structure and the conditional meso patterns documented in Sections B.8.1 and B.8.3. Englishness category coefficients are positive, precisely estimated, and monotonically ordered across all three indicators. Conditional effects for unemployment and claimant count are concentrated among weaker identity positions, mirroring the Britishness categorical results.
+
+## B.8.4.1 Local Unemployment Rate {#sec-b8-cat-engl-unemp}
+
+```{r b8-cat-engl-unemp-main}
+modelsummary(
+  list("(1) No age" = m_u1_eng_cat, "(2) Age" = m_u2_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.19. Local Unemployment Rate: Englishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-engl-unemp-int}
+modelsummary(
+  list("(1) Interaction" = m_u3_eng_cat, "(2) Interaction + Age" = m_u4_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.20. Local Unemployment Rate × Englishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.4.2 Claimant Count {#sec-b8-cat-engl-claimant}
+
+```{r b8-cat-engl-claimant-main}
+modelsummary(
+  list("(1) No age" = m_c1_eng_cat, "(2) Age" = m_c2_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.21. Claimant Count: Englishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-engl-claimant-int}
+modelsummary(
+  list("(1) Interaction" = m_c3_eng_cat, "(2) Interaction + Age" = m_c4_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.22. Claimant Count × Englishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.8.4.3 Local Income (ASHE) {#sec-b8-cat-engl-income}
+
+```{r b8-cat-engl-income-main}
+modelsummary(
+  list("(1) No age" = m_i1_eng_cat, "(2) Age" = m_i2_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.23. Local Income (ASHE): Englishness (Categorical) Main Effects (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b8-cat-engl-income-int}
+modelsummary(
+  list("(1) Interaction" = m_i3_eng_cat, "(2) Interaction + Age" = m_i4_eng_cat),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B8.24. Local Income (ASHE) × Englishness (Categorical): Interaction Models (Cultural DV)",
+  notes   = "Individual and wave FE. SEs clustered by respondent. Reference: Englishness = 7. DV: immigCultural.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.8.5 Description of Meso-Level Variables {#sec-b8-vars}
+
+The meso-level indicators are identical to those used in Appendix B. All variables are derived from official ONS sources and merged to the BES panel by constituency code and fieldwork year.
+
+**Local unemployment rate (APS).** Mean unemployment rate at the parliamentary constituency level, constructed from the Annual Population Survey Local Labour Market Indicators. Reflects the share of economically active individuals who are unemployed based on rolling survey windows.
+
+**Claimant count.** Mean number of benefit claimants per constituency from ONS claimant-count statistics, capturing individuals claiming unemployment-related benefits (Jobseeker's Allowance or Universal Credit). Monthly values are aggregated to yearly constituency-level means.
+
+**Local income (ASHE).** Median weekly gross pay from the Annual Survey of Hours and Earnings, residence-based and covering all working patterns and sexes. Reflects general economic prosperity at the constituency level rather than labour-market risk.
+
+---
+
+*End of Appendix B.8.*

@@ -1,0 +1,547 @@
+---
+title: "Online Appendix B.7: Meso-Level Models — Mundlak Correlated Random Effects"
+subtitle: "Within/Between Decomposition for Constituency-Level Economic Context (Britishness and Englishness)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(haven)
+library(purrr)
+library(lme4)
+library(lmerTest)
+library(modelsummary)
+library(kableExtra)
+
+options(modelsummary_factory_default = "kableExtra")
+
+GOF_MAP <- tribble(
+  ~raw,   ~clean,         ~fmt,
+  "nobs", "Observations", 0,
+  "AIC",  "AIC",          1,
+  "BIC",  "BIC",          1
+)
+
+OMIT_WAVE <- "factor\\(wave\\)"
+
+ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+df <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds"
+)
+
+DV_BASE          <- "immigSelf"
+BRIT_BASE        <- "britishness"
+ENG_BASE         <- "englishness"
+TIME_BASE        <- "starttime"
+AGE_BASE         <- "age"
+MESO_UNEMP_BASE  <- "unemp_rate_mean"
+MESO_CLAIM_BASE  <- "claimant_mean"
+MESO_INCOME_BASE <- "income"
+
+DV_VALID_RANGE    <- 1:10
+IDENT_VALID_RANGE <- 1:7
+
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+identity_label <- function(identity_base) {
+  switch(identity_base, britishness = "brit", englishness = "engl", identity_base)
+}
+
+meso_label <- function(meso_base) {
+  switch(meso_base,
+         unemp_rate_mean = "unemp",
+         claimant_mean   = "claimant",
+         income          = "income_meso",
+         meso_base)
+}
+
+# ── Panel builder ──────────────────────────────────────────────────────────────
+# Both identity and meso indicator are time-varying at the individual level,
+# so both are pivoted into the long panel together with dv, time, and age.
+make_meso_panel <- function(df, dv_base, identity_base, time_base,
+                             meso_base, age_base = AGE_BASE) {
+  waves <- Reduce(intersect, list(
+    waves_available(df, dv_base),
+    waves_available(df, identity_base),
+    waves_available(df, time_base),
+    waves_available(df, meso_base),
+    waves_available(df, age_base)
+  ))
+  if (length(waves) < 3)
+    stop(paste0("Too few overlapping waves for identity=", identity_base,
+                " meso=", meso_base))
+
+  all_cols <- c(
+    paste0(dv_base,       "W", waves),
+    paste0(identity_base, "W", waves),
+    paste0(time_base,     "W", waves),
+    paste0(meso_base,     "W", waves),
+    paste0(age_base,      "W", waves)
+  )
+
+  ident_lbl <- identity_label(identity_base)
+  meso_lbl  <- meso_label(meso_base)
+
+  df |>
+    mutate(across(all_of(all_cols), ~ as.numeric(zap_labels(.x)))) |>
+    select(id, all_of(all_cols)) |>
+    pivot_longer(cols = -id, names_to = c(".value", "wave"),
+                 names_pattern = "(.+)W(\\d+)$") |>
+    rename(
+      dv       = all_of(dv_base),
+      ident    = all_of(identity_base),
+      meso     = all_of(meso_base),
+      age      = all_of(age_base),
+      startime = all_of(time_base)
+    ) |>
+    mutate(
+      id   = as.character(id),
+      wave = as.integer(wave),
+      starttime_parsed = coalesce(
+        suppressWarnings(ymd_hms(as.character(startime), quiet = TRUE)),
+        suppressWarnings(ymd(as.character(startime),     quiet = TRUE))
+      ),
+      year  = year(starttime_parsed),
+      ident = if_else(ident %in% IDENT_VALID_RANGE, ident, NA_real_)
+    ) |>
+    filter(dv %in% DV_VALID_RANGE, !is.na(ident), !is.na(meso), !is.na(wave)) |>
+    rename(!!ident_lbl := ident, !!meso_lbl := meso)
+}
+
+# ── Mundlak decomposition ─────────────────────────────────────────────────────
+# Both identity_var and meso_var are time-varying at the individual level,
+# so both receive _mean (person-mean) and _w (within-deviation) terms.
+add_mundlak_terms <- function(data, vars, id_var = "id") {
+  out <- data |>
+    group_by(.data[[id_var]]) |>
+    mutate(across(all_of(vars),
+                  ~ mean(.x, na.rm = TRUE),
+                  .names = "{.col}_mean")) |>
+    ungroup()
+  for (v in vars) {
+    out[[paste0(v, "_w")]] <- out[[v]] - out[[paste0(v, "_mean")]]
+  }
+  out
+}
+
+# ── Model fitter — continuous identity ───────────────────────────────────────
+# Key quantity: identity_w * meso_w  (within-person interaction)
+# Mundlak correction terms: identity_mean + meso_mean
+# Wave FE as factor(wave), NOT (1|wave) — consistent with FE pipeline
+fit_mundlak_meso <- function(data, identity_var, meso_var,
+                              include_age = FALSE) {
+  mundlak_vars <- c(identity_var, meso_var, "age")
+  d <- add_mundlak_terms(data, vars = mundlak_vars, id_var = "id")
+  age_terms <- if (include_age) "+ age_w + age_mean" else ""
+  fml <- as.formula(paste0(
+    "dv ~ ",
+    identity_var, "_w * ", meso_var, "_w + ",
+    identity_var, "_mean + ", meso_var, "_mean + ",
+    age_terms,
+    " + factor(wave) + (1 | id)"
+  ))
+  lmer(fml, data = d, REML = TRUE, control = ctrl)
+}
+
+# ── Model fitter — categorical identity ──────────────────────────────────────
+# Identity entered as factor (ref = 7) interacted with meso_w.
+# Only meso and age are Mundlak-decomposed; the factor levels capture
+# between-person identity differences directly.
+fit_mundlak_meso_cat <- function(data, identity_var, meso_var,
+                                  include_age = FALSE) {
+  mundlak_vars <- c(meso_var, "age")
+  d <- add_mundlak_terms(data, vars = mundlak_vars, id_var = "id")
+  cat_col <- paste0(identity_var, "_cat")
+  d[[cat_col]] <- relevel(factor(d[[identity_var]], levels = 1:7), ref = "7")
+  age_terms <- if (include_age) "+ age_w + age_mean" else ""
+  fml <- as.formula(paste0(
+    "dv ~ ",
+    cat_col, " * ", meso_var, "_w + ",
+    meso_var, "_mean + ",
+    age_terms,
+    " + factor(wave) + (1 | id)"
+  ))
+  lmer(fml, data = d, REML = TRUE, control = ctrl)
+}
+```
+
+```{r build-panels, include=FALSE}
+panel_brit_unemp  <- make_meso_panel(df, DV_BASE, BRIT_BASE, TIME_BASE, MESO_UNEMP_BASE)
+panel_brit_claim  <- make_meso_panel(df, DV_BASE, BRIT_BASE, TIME_BASE, MESO_CLAIM_BASE)
+panel_brit_income <- make_meso_panel(df, DV_BASE, BRIT_BASE, TIME_BASE, MESO_INCOME_BASE)
+
+panel_engl_unemp  <- make_meso_panel(df, DV_BASE, ENG_BASE, TIME_BASE, MESO_UNEMP_BASE)
+panel_engl_claim  <- make_meso_panel(df, DV_BASE, ENG_BASE, TIME_BASE, MESO_CLAIM_BASE)
+panel_engl_income <- make_meso_panel(df, DV_BASE, ENG_BASE, TIME_BASE, MESO_INCOME_BASE)
+```
+
+```{r estimate-models, include=FALSE}
+# ── Continuous — Britishness ──────────────────────────────────────────────────
+m_brit_unemp_noage  <- fit_mundlak_meso(panel_brit_unemp,  "brit", "unemp",       include_age = FALSE)
+m_brit_unemp_age    <- fit_mundlak_meso(panel_brit_unemp,  "brit", "unemp",       include_age = TRUE)
+m_brit_claim_noage  <- fit_mundlak_meso(panel_brit_claim,  "brit", "claimant",    include_age = FALSE)
+m_brit_claim_age    <- fit_mundlak_meso(panel_brit_claim,  "brit", "claimant",    include_age = TRUE)
+m_brit_inc_noage    <- fit_mundlak_meso(panel_brit_income, "brit", "income_meso", include_age = FALSE)
+m_brit_inc_age      <- fit_mundlak_meso(panel_brit_income, "brit", "income_meso", include_age = TRUE)
+
+# ── Continuous — Englishness ──────────────────────────────────────────────────
+m_engl_unemp_noage  <- fit_mundlak_meso(panel_engl_unemp,  "engl", "unemp",       include_age = FALSE)
+m_engl_unemp_age    <- fit_mundlak_meso(panel_engl_unemp,  "engl", "unemp",       include_age = TRUE)
+m_engl_claim_noage  <- fit_mundlak_meso(panel_engl_claim,  "engl", "claimant",    include_age = FALSE)
+m_engl_claim_age    <- fit_mundlak_meso(panel_engl_claim,  "engl", "claimant",    include_age = TRUE)
+m_engl_inc_noage    <- fit_mundlak_meso(panel_engl_income, "engl", "income_meso", include_age = FALSE)
+m_engl_inc_age      <- fit_mundlak_meso(panel_engl_income, "engl", "income_meso", include_age = TRUE)
+
+# ── Categorical — Britishness ─────────────────────────────────────────────────
+m_brit_cat_unemp_noage  <- fit_mundlak_meso_cat(panel_brit_unemp,  "brit", "unemp",       include_age = FALSE)
+m_brit_cat_unemp_age    <- fit_mundlak_meso_cat(panel_brit_unemp,  "brit", "unemp",       include_age = TRUE)
+m_brit_cat_claim_noage  <- fit_mundlak_meso_cat(panel_brit_claim,  "brit", "claimant",    include_age = FALSE)
+m_brit_cat_claim_age    <- fit_mundlak_meso_cat(panel_brit_claim,  "brit", "claimant",    include_age = TRUE)
+m_brit_cat_inc_noage    <- fit_mundlak_meso_cat(panel_brit_income, "brit", "income_meso", include_age = FALSE)
+m_brit_cat_inc_age      <- fit_mundlak_meso_cat(panel_brit_income, "brit", "income_meso", include_age = TRUE)
+
+# ── Categorical — Englishness ─────────────────────────────────────────────────
+m_engl_cat_unemp_noage  <- fit_mundlak_meso_cat(panel_engl_unemp,  "engl", "unemp",       include_age = FALSE)
+m_engl_cat_unemp_age    <- fit_mundlak_meso_cat(panel_engl_unemp,  "engl", "unemp",       include_age = TRUE)
+m_engl_cat_claim_noage  <- fit_mundlak_meso_cat(panel_engl_claim,  "engl", "claimant",    include_age = FALSE)
+m_engl_cat_claim_age    <- fit_mundlak_meso_cat(panel_engl_claim,  "engl", "claimant",    include_age = TRUE)
+m_engl_cat_inc_noage    <- fit_mundlak_meso_cat(panel_engl_income, "engl", "income_meso", include_age = FALSE)
+m_engl_cat_inc_age      <- fit_mundlak_meso_cat(panel_engl_income, "engl", "income_meso", include_age = TRUE)
+
+# ── Decomposition validity check ──────────────────────────────────────────────
+tmp_check <- add_mundlak_terms(panel_brit_unemp, vars = c("brit", "unemp"))
+stopifnot(
+  max(abs(tmp_check$brit  - (tmp_check$brit_mean  + tmp_check$brit_w)),  na.rm = TRUE) < 1e-8,
+  max(abs(tmp_check$unemp - (tmp_check$unemp_mean + tmp_check$unemp_w)), na.rm = TRUE) < 1e-8
+)
+```
+
+---
+
+All models in this appendix use the Mundlak correlated random-effects (CRE) specification at the meso level. Both the identity variable and the constituency-level economic indicator are time-varying at the individual level — respondents move between parliamentary constituencies across waves, and both local economic conditions and national identification change within individuals over time — and both are therefore Mundlak-decomposed into a person-specific mean (between-person component) and a within-person deviation from that mean. The Mundlak correction terms `identity_mean` and `meso_mean` absorb stable between-person sorting: differences in average national identification and differences in the average local economic environment in which respondents reside. The coefficient on the within-person interaction term `identity_w × meso_w` is the quantity of direct theoretical relevance: it estimates whether the within-individual slope of identity on immigration preferences varies with contemporaneous within-individual changes in constituency-level economic conditions, over and above any between-person compositional pattern. Wave effects are modelled as fixed dummies rather than as a random intercept, consistent with the identification strategy of Appendix B. The random intercept captures residual between-person heterogeneity in baseline attitudes. Wave dummy coefficients are suppressed from all tables for readability.
+
+For the categorical identity robustness specifications (Sections B.7.2 and B.7.4), only the meso indicator is Mundlak-decomposed; the categorical identity factor levels absorb between-person identity differences directly. The interaction of interest in these models is `identity_cat × meso_w`: the within-person meso effect at each identity position relative to the most strongly identified reference category.
+
+---
+
+# B.7.1 Britishness (Continuous) {#sec-b7-brit-cont}
+
+## B.7.1.1 Local Unemployment Rate {#sec-b7-brit-unemp}
+
+The within-person unemployment interaction (`brit_w × unemp_w`) is the key test of whether constituency-level unemployment activates Britishness as a driver of immigration preferences within individuals over time. Where this term is null, the conditional patterns observed in the FE and RE models of Appendix B.1 are attributable to stable between-person sorting rather than dynamic within-individual activation. The Mundlak correction terms (`brit_mean`, `unemp_mean`) confirm that identification and local economic exposure are durably correlated across respondents.
+
+```{r b7-brit-unemp}
+modelsummary(
+  list("(1) No age" = m_brit_unemp_noage, "(2) Age" = m_brit_unemp_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w             = "Britishness (within)",
+    brit_mean          = "Britishness (mean)",
+    unemp_w            = "Unemp. rate (within)",
+    unemp_mean         = "Unemp. rate (mean)",
+    "brit_w:unemp_w"   = "Britishness × Unemp. rate (within)",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.1. Britishness × Local Unemployment Rate: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness × Unemp. rate (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.1.2 Claimant Count {#sec-b7-brit-claimant}
+
+```{r b7-brit-claimant}
+modelsummary(
+  list("(1) No age" = m_brit_claim_noage, "(2) Age" = m_brit_claim_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w                = "Britishness (within)",
+    brit_mean             = "Britishness (mean)",
+    claimant_w            = "Claimant count (within)",
+    claimant_mean         = "Claimant count (mean)",
+    "brit_w:claimant_w"   = "Britishness × Claimant count (within)",
+    age_w                 = "Age (within)",
+    age_mean              = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.2. Britishness × Claimant Count: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness × Claimant count (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.1.3 Local Income (ASHE) {#sec-b7-brit-income}
+
+```{r b7-brit-income}
+modelsummary(
+  list("(1) No age" = m_brit_inc_noage, "(2) Age" = m_brit_inc_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w                   = "Britishness (within)",
+    brit_mean                = "Britishness (mean)",
+    income_meso_w            = "Local income (within)",
+    income_meso_mean         = "Local income (mean)",
+    "brit_w:income_meso_w"   = "Britishness × Local income (within)",
+    age_w                    = "Age (within)",
+    age_mean                 = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.3. Britishness × Local Income (ASHE): Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness × Local income (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.7.2 Britishness (Categorical) {#sec-b7-brit-cat}
+
+The categorical Mundlak specifications replace the continuous Britishness within-deviation with a factor variable (reference: 7, "very strongly British"), interacted with the meso indicator's within-person deviation. This allows the conditional meso effect to vary non-linearly across identity positions, directly mirroring the categorical robustness checks in Appendix B.2. As in Section B.7.1, only the meso indicator and age are Mundlak-decomposed; the factor levels absorb between-person identity sorting.
+
+## B.7.2.1 Local Unemployment Rate {#sec-b7-brit-cat-unemp}
+
+```{r b7-brit-cat-unemp}
+modelsummary(
+  list("(1) No age" = m_brit_cat_unemp_noage, "(2) Age" = m_brit_cat_unemp_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    unemp_w    = "Unemp. rate (within)",
+    unemp_mean = "Unemp. rate (mean)",
+    age_w      = "Age (within)",
+    age_mean   = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.4. Britishness (Categorical) × Local Unemployment Rate: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Britishness = 7. Key quantity: brit_cat × Unemp. rate (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.2.2 Claimant Count {#sec-b7-brit-cat-claimant}
+
+```{r b7-brit-cat-claimant}
+modelsummary(
+  list("(1) No age" = m_brit_cat_claim_noage, "(2) Age" = m_brit_cat_claim_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    claimant_w    = "Claimant count (within)",
+    claimant_mean = "Claimant count (mean)",
+    age_w         = "Age (within)",
+    age_mean      = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.5. Britishness (Categorical) × Claimant Count: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Britishness = 7. Key quantity: brit_cat × Claimant count (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.2.3 Local Income (ASHE) {#sec-b7-brit-cat-income}
+
+```{r b7-brit-cat-income}
+modelsummary(
+  list("(1) No age" = m_brit_cat_inc_noage, "(2) Age" = m_brit_cat_inc_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    income_meso_w    = "Local income (within)",
+    income_meso_mean = "Local income (mean)",
+    age_w            = "Age (within)",
+    age_mean         = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.6. Britishness (Categorical) × Local Income (ASHE): Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Britishness = 7. Key quantity: brit_cat × Local income (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.7.3 Englishness (Continuous) {#sec-b7-engl-cont}
+
+The Englishness Mundlak models replicate the Britishness structure exactly, with Englishness replacing Britishness as the identity variable. As in Appendix B.3, both identity and meso indicator are Mundlak-decomposed. The within-person interaction `engl_w × meso_w` is the key quantity throughout.
+
+## B.7.3.1 Local Unemployment Rate {#sec-b7-engl-unemp}
+
+```{r b7-engl-unemp}
+modelsummary(
+  list("(1) No age" = m_engl_unemp_noage, "(2) Age" = m_engl_unemp_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w             = "Englishness (within)",
+    engl_mean          = "Englishness (mean)",
+    unemp_w            = "Unemp. rate (within)",
+    unemp_mean         = "Unemp. rate (mean)",
+    "engl_w:unemp_w"   = "Englishness × Unemp. rate (within)",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.7. Englishness × Local Unemployment Rate: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness × Unemp. rate (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.3.2 Claimant Count {#sec-b7-engl-claimant}
+
+```{r b7-engl-claimant}
+modelsummary(
+  list("(1) No age" = m_engl_claim_noage, "(2) Age" = m_engl_claim_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w                = "Englishness (within)",
+    engl_mean             = "Englishness (mean)",
+    claimant_w            = "Claimant count (within)",
+    claimant_mean         = "Claimant count (mean)",
+    "engl_w:claimant_w"   = "Englishness × Claimant count (within)",
+    age_w                 = "Age (within)",
+    age_mean              = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.8. Englishness × Claimant Count: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness × Claimant count (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.3.3 Local Income (ASHE) {#sec-b7-engl-income}
+
+```{r b7-engl-income}
+modelsummary(
+  list("(1) No age" = m_engl_inc_noage, "(2) Age" = m_engl_inc_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w                   = "Englishness (within)",
+    engl_mean                = "Englishness (mean)",
+    income_meso_w            = "Local income (within)",
+    income_meso_mean         = "Local income (mean)",
+    "engl_w:income_meso_w"   = "Englishness × Local income (within)",
+    age_w                    = "Age (within)",
+    age_mean                 = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.9. Englishness × Local Income (ASHE): Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness × Local income (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# B.7.4 Englishness (Categorical) {#sec-b7-engl-cat}
+
+As in Section B.7.2, Englishness is entered as a factor (reference: 7, "very strongly English") interacted with the meso indicator's within-person deviation. Only the meso indicator and age are Mundlak-decomposed.
+
+## B.7.4.1 Local Unemployment Rate {#sec-b7-engl-cat-unemp}
+
+```{r b7-engl-cat-unemp}
+modelsummary(
+  list("(1) No age" = m_engl_cat_unemp_noage, "(2) Age" = m_engl_cat_unemp_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    unemp_w    = "Unemp. rate (within)",
+    unemp_mean = "Unemp. rate (mean)",
+    age_w      = "Age (within)",
+    age_mean   = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.10. Englishness (Categorical) × Local Unemployment Rate: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Englishness = 7. Key quantity: engl_cat × Unemp. rate (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.4.2 Claimant Count {#sec-b7-engl-cat-claimant}
+
+```{r b7-engl-cat-claimant}
+modelsummary(
+  list("(1) No age" = m_engl_cat_claim_noage, "(2) Age" = m_engl_cat_claim_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    claimant_w    = "Claimant count (within)",
+    claimant_mean = "Claimant count (mean)",
+    age_w         = "Age (within)",
+    age_mean      = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.11. Englishness (Categorical) × Claimant Count: Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Englishness = 7. Key quantity: engl_cat × Claimant count (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.7.4.3 Local Income (ASHE) {#sec-b7-engl-cat-income}
+
+```{r b7-engl-cat-income}
+modelsummary(
+  list("(1) No age" = m_engl_cat_inc_noage, "(2) Age" = m_engl_cat_inc_age),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    income_meso_w    = "Local income (within)",
+    income_meso_mean = "Local income (mean)",
+    age_w            = "Age (within)",
+    age_mean         = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B7.12. Englishness (Categorical) × Local Income (ASHE): Mundlak CRE",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Reference: Englishness = 7. Key quantity: engl_cat × Local income (within).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+*End of Appendix B.7.*
