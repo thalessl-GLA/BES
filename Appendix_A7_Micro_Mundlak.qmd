@@ -1,0 +1,362 @@
+---
+title: "Online Appendix A.7: Micro-Level Models — Mundlak Correlated Random Effects"
+subtitle: "H1 and H2 Robustness via Within/Between Decomposition"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(haven)
+library(purrr)
+library(lme4)
+library(lmerTest)
+library(modelsummary)
+
+options(modelsummary_factory_default = "kableExtra")
+
+# ── Shared GOF map ────────────────────────────────────────────────────────────
+GOF_MAP <- tribble(
+  ~raw,   ~clean,          ~fmt,
+  "nobs", "Observations",  0,
+  "AIC",  "AIC",           1,
+  "BIC",  "BIC",           1
+)
+
+# Suppress wave dummies in all tables
+OMIT_WAVE <- "factor\\(wave\\)"
+
+ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+df <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds"
+)
+eq_long <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds"
+) |>
+  mutate(id = as.character(id), wave = as.integer(wave))
+
+stopifnot(!"income" %in% names(eq_long))
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+DV_BASE       <- "immigSelf"
+BRIT_BASE     <- "britishness"
+ENG_BASE      <- "englishness"
+TIME_BASE     <- "starttime"
+AGE_BASE      <- "age"
+INCOME_BASE   <- "income"
+RISK_BASE     <- "riskUnemployment"
+DV_VALID      <- 1:10
+IDENT_VALID   <- 1:7
+
+# ── Helper: wave availability ─────────────────────────────────────────────────
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+# ── Panel builder ─────────────────────────────────────────────────────────────
+make_long_panel <- function(df, dv_base, identity_base, time_base,
+                            econ_base, age_base = AGE_BASE) {
+  waves <- Reduce(intersect, list(
+    waves_available(df, dv_base),
+    waves_available(df, identity_base),
+    waves_available(df, time_base),
+    waves_available(df, econ_base),
+    waves_available(df, age_base)
+  ))
+  if (length(waves) < 3) stop("Too few overlapping waves.")
+
+  all_cols <- c(
+    paste0(dv_base,       "W", waves),
+    paste0(identity_base, "W", waves),
+    paste0(time_base,     "W", waves),
+    paste0(econ_base,     "W", waves),
+    paste0(age_base,      "W", waves)
+  )
+
+  df |>
+    mutate(across(all_of(all_cols), ~ as.numeric(zap_labels(.x)))) |>
+    select(id, all_of(all_cols)) |>
+    pivot_longer(cols = -id,
+                 names_to  = c(".value", "wave"),
+                 names_pattern = "(.+)W(\\d+)$") |>
+    rename(
+      dv      = all_of(dv_base),
+      ident   = all_of(identity_base),
+      econ    = all_of(econ_base),
+      age     = all_of(age_base),
+      startime = all_of(time_base)
+    ) |>
+    mutate(
+      id   = as.character(id),
+      wave = as.integer(wave),
+      starttime_parsed = coalesce(
+        suppressWarnings(ymd_hms(as.character(startime), quiet = TRUE)),
+        suppressWarnings(ymd(as.character(startime),     quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    filter(dv %in% DV_VALID, ident %in% IDENT_VALID, !is.na(econ), !is.na(wave))
+}
+
+econ_label <- function(econ_base) {
+  switch(econ_base,
+    income            = "income",
+    riskUnemployment  = "risk_unemp",
+    income_eq_child03 = "income_eq_child03",
+    income_eq_child05 = "income_eq_child05",
+    econ_base
+  )
+}
+
+build_panel <- function(identity_base, econ_base) {
+  p <- make_long_panel(df, DV_BASE, identity_base, TIME_BASE, econ_base, AGE_BASE)
+
+  identity_label <- switch(identity_base,
+    britishness = "brit", englishness = "engl", identity_base
+  )
+  p <- p |> rename(!!identity_label := ident)
+
+  if (econ_base == RISK_BASE) {
+    p <- p |>
+      mutate(econ = if_else(between(econ, 0, 10), econ, NA_real_)) |>
+      filter(!is.na(econ))
+  }
+
+  label <- econ_label(econ_base)
+  p |> rename(!!label := econ)
+}
+
+add_eq_income <- function(panel) {
+  panel |> left_join(eq_long, by = c("id", "wave"))
+}
+
+# ── Mundlak decomposition ─────────────────────────────────────────────────────
+add_mundlak_terms <- function(data, vars, id_var = "id") {
+  out <- data |>
+    group_by(.data[[id_var]]) |>
+    mutate(across(all_of(vars),
+                  ~ mean(.x, na.rm = TRUE),
+                  .names = "{.col}_mean")) |>
+    ungroup()
+  for (v in vars) {
+    out[[paste0(v, "_w")]] <- out[[v]] - out[[paste0(v, "_mean")]]
+  }
+  out
+}
+
+# ── Model fitter ─────────────────────────────────────────────────────────────
+fit_mundlak <- function(data, identity_var, econ_var, include_age = TRUE) {
+  mundlak_vars <- c(identity_var, econ_var, "age")
+  d <- add_mundlak_terms(data, vars = mundlak_vars, id_var = "id")
+
+  age_terms <- if (include_age) "+ age_w + age_mean" else ""
+
+  fml <- as.formula(paste0(
+    "dv ~ ",
+    identity_var, "_w * ", econ_var, "_w + ",
+    identity_var, "_mean + ", econ_var, "_mean + ",
+    age_terms,
+    " + factor(wave) + (1 | id)"
+  ))
+
+  lmer(fml, data = d, REML = TRUE, control = ctrl)
+}
+```
+
+```{r build-panels, include=FALSE}
+# ── Build all panels ──────────────────────────────────────────────────────────
+panel_brit_income  <- build_panel(BRIT_BASE, INCOME_BASE)
+panel_brit_risk    <- build_panel(BRIT_BASE, RISK_BASE)
+panel_brit_eq_base <- add_eq_income(panel_brit_income)
+panel_brit_eq03    <- panel_brit_eq_base |> filter(!is.na(income_eq_child03))
+panel_brit_eq05    <- panel_brit_eq_base |> filter(!is.na(income_eq_child05))
+
+panel_engl_income  <- build_panel(ENG_BASE, INCOME_BASE)
+panel_engl_risk    <- build_panel(ENG_BASE, RISK_BASE)
+panel_engl_eq_base <- add_eq_income(panel_engl_income)
+panel_engl_eq03    <- panel_engl_eq_base |> filter(!is.na(income_eq_child03))
+panel_engl_eq05    <- panel_engl_eq_base |> filter(!is.na(income_eq_child05))
+```
+
+```{r estimate-models, include=FALSE}
+# ── All Mundlak models (age-controlled only) ──────────────────────────────────
+
+# Britishness
+m_brit_income <- fit_mundlak(panel_brit_income, "brit", "income")
+m_brit_eq03   <- fit_mundlak(panel_brit_eq03,   "brit", "income_eq_child03")
+m_brit_eq05   <- fit_mundlak(panel_brit_eq05,   "brit", "income_eq_child05")
+m_brit_risk   <- fit_mundlak(panel_brit_risk,   "brit", "risk_unemp")
+
+# Englishness
+m_engl_income <- fit_mundlak(panel_engl_income, "engl", "income")
+m_engl_eq03   <- fit_mundlak(panel_engl_eq03,   "engl", "income_eq_child03")
+m_engl_eq05   <- fit_mundlak(panel_engl_eq05,   "engl", "income_eq_child05")
+m_engl_risk   <- fit_mundlak(panel_engl_risk,   "engl", "risk_unemp")
+
+# ── Decomposition validity check ──────────────────────────────────────────────
+tmp <- add_mundlak_terms(panel_brit_income, vars = c("brit", "income"))
+stopifnot(
+  max(abs(tmp$brit   - (tmp$brit_mean   + tmp$brit_w)),   na.rm = TRUE) < 1e-8,
+  max(abs(tmp$income - (tmp$income_mean + tmp$income_w)), na.rm = TRUE) < 1e-8
+)
+```
+
+---
+
+All models in this appendix use the Mundlak correlated random-effects specification. Each time-varying predictor is decomposed into a person-specific mean (between-person component) and a within-person deviation from that mean. Wave effects are modelled as fixed dummies rather than as a random intercept, consistent with the identification strategy of the main fixed-effects models. The random intercept captures residual between-person heterogeneity. The coefficient on the within-person interaction term (`identity_w × econ_w`) is the quantity of direct relevance to H2: it estimates whether the within-individual slope of identity on immigration preferences varies with contemporaneous within-individual changes in economic insecurity, net of between-person differences and common period shocks. Wave dummy coefficients are suppressed from all tables for readability; full model objects are available on request.
+
+---
+
+# A.7.1 Britishness × Income {#sec-mundlak-brit-income}
+
+```{r tbl-brit-income}
+modelsummary(
+  list(
+    "Raw income"      = m_brit_income,
+    "Eq. income (0.3)"= m_brit_eq03,
+    "Eq. income (0.5)"= m_brit_eq05
+  ),
+  coef_omit  = OMIT_WAVE,
+  coef_rename = c(
+    brit_w                        = "Britishness (within)",
+    brit_mean                     = "Britishness (mean)",
+    income_w                      = "Income (within)",
+    income_mean                   = "Income (mean)",
+    "brit_w:income_w"             = "Britishness × Income (within)",
+    income_eq_child03_w           = "Eq. income 0.3 (within)",
+    income_eq_child03_mean        = "Eq. income 0.3 (mean)",
+    "brit_w:income_eq_child03_w"  = "Britishness × Eq. income 0.3 (within)",
+    income_eq_child05_w           = "Eq. income 0.5 (within)",
+    income_eq_child05_mean        = "Eq. income 0.5 (mean)",
+    "brit_w:income_eq_child05_w"  = "Britishness × Eq. income 0.5 (within)",
+    age_w                         = "Age (within)",
+    age_mean                      = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A7.1. Britishness × Income: Mundlak CRE Models",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Within-person interaction is the key test of H2.",
+  output  = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+---
+
+# A.7.2 Britishness × Unemployment Risk {#sec-mundlak-brit-risk}
+
+```{r tbl-brit-risk}
+modelsummary(
+  list("Unemployment risk" = m_brit_risk),
+  coef_omit  = OMIT_WAVE,
+  coef_rename = c(
+    brit_w               = "Britishness (within)",
+    brit_mean            = "Britishness (mean)",
+    risk_unemp_w         = "Unemployment risk (within)",
+    risk_unemp_mean      = "Unemployment risk (mean)",
+    "brit_w:risk_unemp_w"= "Britishness × Risk (within)",
+    age_w                = "Age (within)",
+    age_mean             = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A7.2. Britishness × Unemployment Risk: Mundlak CRE Model",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Risk measured on 0–10 scale.",
+  output  = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+---
+
+# A.7.3 Englishness × Income {#sec-mundlak-engl-income}
+
+```{r tbl-engl-income}
+modelsummary(
+  list(
+    "Raw income"      = m_engl_income,
+    "Eq. income (0.3)"= m_engl_eq03,
+    "Eq. income (0.5)"= m_engl_eq05
+  ),
+  coef_omit  = OMIT_WAVE,
+  coef_rename = c(
+    engl_w                        = "Englishness (within)",
+    engl_mean                     = "Englishness (mean)",
+    income_w                      = "Income (within)",
+    income_mean                   = "Income (mean)",
+    "engl_w:income_w"             = "Englishness × Income (within)",
+    income_eq_child03_w           = "Eq. income 0.3 (within)",
+    income_eq_child03_mean        = "Eq. income 0.3 (mean)",
+    "engl_w:income_eq_child03_w"  = "Englishness × Eq. income 0.3 (within)",
+    income_eq_child05_w           = "Eq. income 0.5 (within)",
+    income_eq_child05_mean        = "Eq. income 0.5 (mean)",
+    "engl_w:income_eq_child05_w"  = "Englishness × Eq. income 0.5 (within)",
+    age_w                         = "Age (within)",
+    age_mean                      = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A7.3. Englishness × Income: Mundlak CRE Models",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Within-person interaction is the key test of H2.",
+  output  = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+---
+
+# A.7.4 Englishness × Unemployment Risk {#sec-mundlak-engl-risk}
+
+```{r tbl-engl-risk}
+modelsummary(
+  list("Unemployment risk" = m_engl_risk),
+  coef_omit  = OMIT_WAVE,
+  coef_rename = c(
+    engl_w               = "Englishness (within)",
+    engl_mean            = "Englishness (mean)",
+    risk_unemp_w         = "Unemployment risk (within)",
+    risk_unemp_mean      = "Unemployment risk (mean)",
+    "engl_w:risk_unemp_w"= "Englishness × Risk (within)",
+    age_w                = "Age (within)",
+    age_mean             = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A7.4. Englishness × Unemployment Risk: Mundlak CRE Model",
+  notes   = "REML estimation. Wave dummies included but suppressed. Random intercept for respondent. Risk measured on 0–10 scale.",
+  output  = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+---
+
+*End of Appendix A.7.*

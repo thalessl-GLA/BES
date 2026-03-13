@@ -1,0 +1,708 @@
+---
+title: "Online Appendix A.8: Micro-Level Models - Cultural DV"
+subtitle: "H1 (Identity– Cultural Attitudes Baseline) and H2 (Individual Economic Insecurity Moderation)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    code-fold: false
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+library(ggplot2)
+library(modelsummary)
+
+# ── Custom modelsummary options ───────────────────────────────────────────────
+options(modelsummary_factory_default = "kableExtra")
+
+# Shared gof rows for all tables (keeps output compact)
+GOF_MAP <- tribble(
+  ~raw,          ~clean,          ~fmt,
+  "nobs",        "Observations",  0,
+  "FE: id",      "Individual FE", 0,
+  "FE: wave",    "Wave FE",       0,
+  "adj.r.squared","Adj. R²",      3,
+  "within.r.squared","Within R²", 6,
+  "rmse",        "RMSE",          3
+)
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE   <- "immigCultural"
+BRIT_BASE <- "britishness"
+ENG_BASE  <- "englishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"
+INCOME_BASE <- "income"
+RISK_BASE   <- "riskUnemployment"
+
+# ── Helper functions ──────────────────────────────────────────────────────────
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+make_long_with_age <- function(df, dv_base, brit_base, time_base, age_base) {
+  w_dv   <- waves_available(df, dv_base)
+  w_brit <- waves_available(df, brit_base)
+  w_time <- waves_available(df, time_base)
+  w_age  <- waves_available(df, age_base)
+  waves  <- Reduce(intersect, list(w_dv, w_brit, w_time, w_age))
+  if (length(waves) < 3) stop("Too few overlapping waves.")
+
+  dv_cols   <- paste0(dv_base,   "W", waves)
+  brit_cols <- paste0(brit_base, "W", waves)
+  time_cols <- paste0(time_base, "W", waves)
+  age_cols  <- paste0(age_base,  "W", waves)
+
+  df |>
+    mutate(
+      across(all_of(dv_cols),   ~ as.numeric(zap_labels(.x))),
+      across(all_of(brit_cols), ~ as.numeric(zap_labels(.x))),
+      across(all_of(age_cols),  ~ as.numeric(zap_labels(.x)))
+    ) |>
+    select(id, all_of(dv_cols), all_of(brit_cols),
+           all_of(time_cols), all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr    = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(dv = all_of(dv_base), brit = all_of(brit_base), age = all_of(age_base)) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+make_long_with_income <- function(df,
+                                  dv_base,
+                                  brit_base,
+                                  time_base,
+                                  income_base,
+                                  age_base = NULL){
+
+  w_dv     <- waves_available(df, dv_base)
+  w_brit   <- waves_available(df, brit_base)
+  w_time   <- waves_available(df, time_base)
+  w_income <- waves_available(df, income_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_income))
+
+  if(!is.null(age_base)){
+    w_age <- waves_available(df, age_base)
+    waves <- intersect(waves, w_age)
+  }
+
+  if(length(waves) < 3){
+    stop("Too few overlapping waves across DV, britishness, time, income (and age).")
+  }
+
+  dv_cols     <- paste0(dv_base,     "W", waves)
+  brit_cols   <- paste0(brit_base,   "W", waves)
+  time_cols   <- paste0(time_base,   "W", waves)
+  income_cols <- paste0(income_base, "W", waves)
+  age_cols    <- if(!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),     ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(brit_cols),   ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(income_cols), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),    ~ as.numeric(haven::zap_labels(.x)))
+    )
+
+  out <- df2 |>
+    select(
+      id,
+      all_of(dv_cols),
+      all_of(brit_cols),
+      all_of(time_cols),
+      all_of(income_cols),
+      all_of(age_cols)
+    ) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv     = all_of(dv_base),
+      brit   = all_of(brit_base),
+      income = all_of(income_base)
+    )
+
+  if(!is.null(age_base) && age_base %in% names(out)){
+    out <- out |> rename(age = all_of(age_base))
+  }
+
+  out |>
+    filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+```
+
+```{r build-panels, include=FALSE}
+# ── Base Britishness panel ────────────────────────────────────────────────────
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+
+# ── Base Englishness panel ────────────────────────────────────────────────────
+panel_self_eng <- make_long_with_age(
+    df, DV_BASE, ENG_BASE, TIME_BASE, AGE_BASE
+  ) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+# ── Equivalised income (joined externally) ────────────────────────────────────
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds") |>
+  mutate(id = as.character(id), wave = as.integer(wave))
+
+# Britishness × income panels
+panel_income_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE)
+panel_income_age   <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, AGE_BASE)
+
+panel_eq_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE) |>
+  left_join(eq_long, by = c("id", "wave"))
+panel_eq_age <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, AGE_BASE) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq03_noage <- panel_eq_noage |> filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   |> filter(!is.na(income_eq_child03))
+panel_eq05_noage <- panel_eq_noage |> filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   |> filter(!is.na(income_eq_child05))
+
+# Britishness × risk panels
+panel_risk_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, RISK_BASE) |>
+  rename(risk_unemp = income) |>
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) |>
+  filter(!is.na(risk_unemp))
+
+panel_risk_age <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, RISK_BASE, AGE_BASE) |>
+  rename(risk_unemp = income) |>
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) |>
+  filter(!is.na(risk_unemp))
+
+# Englishness × income panels
+panel_eng_eq_noage <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, INCOME_BASE) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_)) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, INCOME_BASE, AGE_BASE) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_)) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq03_noage <- panel_eng_eq_noage |> filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   |> filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq05_noage <- panel_eng_eq_noage |> filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   |> filter(!is.na(engl), !is.na(income_eq_child05))
+
+# Englishness × risk panels
+panel_risk_noage_eng <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, RISK_BASE) |>
+  rename(engl = brit, risk_unemp = income) |>
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+panel_risk_age_eng <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, RISK_BASE, AGE_BASE) |>
+  rename(engl = brit, risk_unemp = income) |>
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+# ── Categorical identity factors ───────────────────────────────────────────────
+add_brit_cat <- function(d) {
+  d |> mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+}
+add_engl_cat <- function(d) {
+  d |> mutate(
+    engl_num = as.numeric(engl),
+    engl_num = if_else(engl_num %in% 1:7, engl_num, NA_real_),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) |> filter(!is.na(engl_num))
+}
+
+panel_self         <- add_brit_cat(panel_self)
+panel_income_noage <- add_brit_cat(panel_income_noage)
+panel_income_age   <- add_brit_cat(panel_income_age)
+panel_eq_noage     <- add_brit_cat(panel_eq_noage)
+panel_eq_age       <- add_brit_cat(panel_eq_age)
+panel_eq03_noage   <- add_brit_cat(panel_eq03_noage)
+panel_eq03_age     <- add_brit_cat(panel_eq03_age)
+panel_eq05_noage   <- add_brit_cat(panel_eq05_noage)
+panel_eq05_age     <- add_brit_cat(panel_eq05_age)
+panel_risk_noage   <- add_brit_cat(panel_risk_noage)
+panel_risk_age     <- add_brit_cat(panel_risk_age)
+
+panel_self_eng       <- add_engl_cat(panel_self_eng)
+panel_eng_eq03_noage <- add_engl_cat(panel_eng_eq03_noage)
+panel_eng_eq03_age   <- add_engl_cat(panel_eng_eq03_age)
+panel_eng_eq05_noage <- add_engl_cat(panel_eng_eq05_noage)
+panel_eng_eq05_age   <- add_engl_cat(panel_eng_eq05_age)
+panel_risk_noage_eng <- add_engl_cat(panel_risk_noage_eng)
+panel_risk_age_eng   <- add_engl_cat(panel_risk_age_eng)
+```
+
+------------------------------------------------------------------------
+
+This appendix reports the full model output supporting Sections 5.1 (H1) and 5.2 (H2) of the main text. All models use individual and wave fixed effects with standard errors clustered at the respondent level. The outcome throughout is the cultural immigration attitudes item (immigCultural), which asks respondents whether immigration undermines or enriches British cultural life, coded so that higher values indicate more permissive attitudes. Sections A.8.1–A.8.2 present Britishness models; Sections A.8.3–A.8.4 present the corresponding Englishness models. Section A.8.5 reports categorical robustness checks for both identity dimensions.
+
+------------------------------------------------------------------------
+
+# A.8.1 H1: Baseline Identity–Cultural Attitudes Models (Britishness) {#sec-a8-h1-brit}
+
+Tables A8.1.1 and A8.1.2 report the baseline fixed-effects models of Britishness on cultural immigration attitudes, corresponding to Table 1 in the main text. Column (1) enters Britishness alone; column (2) adds age as a time-varying control. Britishness is consistently negative and precisely estimated across both specifications; age is not statistically significant, consistent with the expectation that most age-related variation is absorbed by the individual fixed effect.
+
+```{r h1-brit-models}
+m1 <- feols(dv ~ brit       | id + wave, data = panel_self, cluster = "id")
+m2 <- feols(dv ~ brit + age | id + wave, data = panel_self, cluster = "id")
+
+modelsummary(
+  list("No age" = m1, "Age" = m2),
+  coef_rename = c(brit = "Britishness", age = "Age"),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A1.1. Britishness and Immigration Attitudes: Baseline Models",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+Figure A8.1.1 plots the wave-specific Britishness slopes from a model that interacts Britishness with wave indicators (individual FE only, no wave FE), providing a non-parametric picture of how the identity–attitudes association evolves across the panel. The reference wave is Wave 7.
+
+```{r h1-brit-wave-plot, fig.cap="Figure A1.1. Wave-specific effect of Britishness on immigration self-placement (ref = Wave 7). Individual FE only; no wave FE. Error bars are 95% confidence intervals."}
+m_wave <- feols(dv ~ i(wave, brit) | id, data = panel_self, cluster = "id")
+
+iplot(
+  m_wave,
+  xlab = "Wave",
+  main = ""
+)
+```
+
+------------------------------------------------------------------------
+
+# A.8.2 H2: Individual Economic Insecurity — Income (Britishness) {#sec-a8-h2-brit-income}
+
+Tables A8.2.1–A8.2.3 report the income moderation models for Britishness. Three income operationalisations are reported: raw household income bands (Table A8.2.1), equivalised income with a child weight of 0.3 (Table A8.2.2), and equivalised income with a child weight of 0.5 (Table A8.2.3). In each table, column (1) enters income alone with age, column (2) adds Britishness, and column (3) introduces the Britishness × income interaction. The interaction term is negligible and statistically indistinguishable from zero across all three operationalisations, supporting the null result for income-based moderation reported in Section 5.2.
+
+```{r h2-brit-income-models}
+# Raw income
+m_inc_0 <- feols(dv ~ income + age            | id + wave, data = panel_income_age,   cluster = "id")
+m_inc_1 <- feols(dv ~ brit + income + age     | id + wave, data = panel_income_age,   cluster = "id")
+m_inc_2 <- feols(dv ~ brit * income + age     | id + wave, data = panel_income_age,   cluster = "id")
+
+modelsummary(
+  list("Income" = m_inc_0, "Britishness" = m_inc_1, "Interaction" = m_inc_2),
+  coef_rename = c(brit = "Britishness", income = "Income", "brit:income" = "Britishness × Income", age = "Age"),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A2.1. Britishness × Raw Household Income",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h2-brit-eq03-models}
+# Equivalised income, child weight = 0.3
+m_eq03_0 <- feols(dv ~ income_eq_child03 + age        | id + wave, data = panel_eq03_age, cluster = "id")
+m_eq03_1 <- feols(dv ~ brit + income_eq_child03 + age | id + wave, data = panel_eq03_age, cluster = "id")
+m_eq03_2 <- feols(dv ~ brit * income_eq_child03 + age | id + wave, data = panel_eq03_age, cluster = "id")
+
+modelsummary(
+  list("Income" = m_eq03_0, "Britishness" = m_eq03_1, "Interaction" = m_eq03_2),
+  coef_rename = c(
+    brit = "Britishness",
+    income_eq_child03 = "Eq. income (w = 0.3)",
+    "brit:income_eq_child03" = "Britishness × Eq. income",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A2.2. Britishness × Equivalised Income (child weight = 0.3)",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h2-brit-eq05-models}
+# Equivalised income, child weight = 0.5
+m_eq05_0 <- feols(dv ~ income_eq_child05 + age        | id + wave, data = panel_eq05_age, cluster = "id")
+m_eq05_1 <- feols(dv ~ brit + income_eq_child05 + age | id + wave, data = panel_eq05_age, cluster = "id")
+m_eq05_2 <- feols(dv ~ brit * income_eq_child05 + age | id + wave, data = panel_eq05_age, cluster = "id")
+
+modelsummary(
+  list("Income" = m_eq05_0, "Britishness" = m_eq05_1, "Interaction" = m_eq05_2),
+  coef_rename = c(
+    brit = "Britishness",
+    income_eq_child05 = "Eq. income (w = 0.5)",
+    "brit:income_eq_child05" = "Britishness × Eq. income",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A2.3. Britishness × Equivalised Income (child weight = 0.5)",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# A.8.3 H2: Individual Economic Insecurity — Unemployment Risk (Britishness) {#sec-a8-h2-brit-risk}
+
+Tables A8.3.1–A8.3.2 report models interacting Britishness with perceived unemployment risk. The interaction term is negligible across all specifications. Table A8.3.2 reports the auxiliary diagnostic: a model in which Britishness is regressed on perceived unemployment risk within individuals. The coefficient is small and the direction is negative, indicating that perceived employment insecurity does not activate British national identity within persons.
+
+```{r h2-brit-risk-models}
+m_risk_0 <- feols(dv ~ risk_unemp + age        | id + wave, data = panel_risk_age, cluster = "id")
+m_risk_1 <- feols(dv ~ brit + risk_unemp + age | id + wave, data = panel_risk_age, cluster = "id")
+m_risk_2 <- feols(dv ~ brit * risk_unemp + age | id + wave, data = panel_risk_age, cluster = "id")
+
+modelsummary(
+  list("Risk" = m_risk_0, "Britishness" = m_risk_1, "Interaction" = m_risk_2),
+  coef_rename = c(
+    brit = "Britishness",
+    risk_unemp = "Unemployment risk",
+    "brit:risk_unemp" = "Britishness × Risk",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A3.1. Britishness × Perceived Unemployment Risk",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Risk measured on 0–10 scale.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h2-brit-risk-diagnostic}
+m_brit_risk_noage <- feols(brit ~ risk_unemp       | id + wave, data = panel_risk_noage, cluster = "id")
+m_brit_risk_age   <- feols(brit ~ risk_unemp + age | id + wave, data = panel_risk_age,   cluster = "id")
+
+modelsummary(
+  list("No age" = m_brit_risk_noage, "Age" = m_brit_risk_age),
+  coef_rename = c(risk_unemp = "Unemployment risk", age = "Age"),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A3.2. Auxiliary: Does Unemployment Risk Predict Within-Person Change in Britishness?",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Dependent variable: Britishness (1–7).",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# A.8.4 H1 and H2: Englishness Models {#sec-a8-h1-h2-engl}
+
+Sections A.8.4.1–A.8.4.3 replicate the Britishness models from Sections A.8.1–A.8.3 for Englishness. The pattern closely mirrors the Britishness results: Englishness is negative and precisely estimated in the baseline models and across all additive income and risk specifications, and the interaction terms remain negligible throughout.
+
+## A.8.4.1 Baseline {#sec-a8-h1-engl}
+
+```{r h1-engl-models}
+m1_eng <- feols(dv ~ engl       | id + wave, data = panel_self_eng, cluster = "id")
+m2_eng <- feols(dv ~ engl + age | id + wave, data = panel_self_eng, cluster = "id")
+
+modelsummary(
+  list("No age" = m1_eng, "Age" = m2_eng),
+  coef_rename = c(engl = "Englishness", age = "Age"),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A4.1. Englishness and Immigration Attitudes: Baseline Models",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h1-engl-wave-plot, fig.cap="Figure A4.1. Wave-specific effect of Englishness on immigration self-placement (ref = Wave 7). Individual FE only; no wave FE. Error bars are 95% confidence intervals."}
+m_wave_eng <- feols(dv ~ i(wave, engl) | id, data = panel_self_eng, cluster = "id")
+
+iplot(
+  m_wave_eng,
+  xlab = "Wave",
+  main = ""
+)
+```
+
+## A.8.4.2 Income Moderation {#sec-a8-h2-engl-income}
+
+```{r h2-engl-eq03-models}
+m_eng_eq03_0 <- feols(dv ~ income_eq_child03 + age        | id + wave, data = panel_eng_eq03_age, cluster = "id")
+m_eng_eq03_1 <- feols(dv ~ engl + income_eq_child03 + age | id + wave, data = panel_eng_eq03_age, cluster = "id")
+m_eng_eq03_2 <- feols(dv ~ engl * income_eq_child03 + age | id + wave, data = panel_eng_eq03_age, cluster = "id")
+
+modelsummary(
+  list("Income" = m_eng_eq03_0, "Englishness" = m_eng_eq03_1, "Interaction" = m_eng_eq03_2),
+  coef_rename = c(
+    engl = "Englishness",
+    income_eq_child03 = "Eq. income (w = 0.3)",
+    "engl:income_eq_child03" = "Englishness × Eq. income",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A4.2. Englishness × Equivalised Income (child weight = 0.3)",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h2-engl-eq05-models}
+m_eng_eq05_0 <- feols(dv ~ income_eq_child05 + age        | id + wave, data = panel_eng_eq05_age, cluster = "id")
+m_eng_eq05_1 <- feols(dv ~ engl + income_eq_child05 + age | id + wave, data = panel_eng_eq05_age, cluster = "id")
+m_eng_eq05_2 <- feols(dv ~ engl * income_eq_child05 + age | id + wave, data = panel_eng_eq05_age, cluster = "id")
+
+modelsummary(
+  list("Income" = m_eng_eq05_0, "Englishness" = m_eng_eq05_1, "Interaction" = m_eng_eq05_2),
+  coef_rename = c(
+    engl = "Englishness",
+    income_eq_child05 = "Eq. income (w = 0.5)",
+    "engl:income_eq_child05" = "Englishness × Eq. income",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A4.3. Englishness × Equivalised Income (child weight = 0.5)",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+## A.8.4.3 Unemployment Risk Moderation {#sec-a8-h2-engl-risk}
+
+```{r h2-engl-risk-models}
+m_risk_eng_0 <- feols(dv ~ risk_unemp + age        | id + wave, data = panel_risk_age_eng, cluster = "id")
+m_risk_eng_1 <- feols(dv ~ engl + risk_unemp + age | id + wave, data = panel_risk_age_eng, cluster = "id")
+m_risk_eng_2 <- feols(dv ~ engl * risk_unemp + age | id + wave, data = panel_risk_age_eng, cluster = "id")
+
+modelsummary(
+  list("Risk" = m_risk_eng_0, "Englishness" = m_risk_eng_1, "Interaction" = m_risk_eng_2),
+  coef_rename = c(
+    engl = "Englishness",
+    risk_unemp = "Unemployment risk",
+    "engl:risk_unemp" = "Englishness × Risk",
+    age = "Age"
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A4.4. Englishness × Perceived Unemployment Risk",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Risk measured on 0–10 scale.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r h2-engl-risk-diagnostic}
+m_engl_risk_noage <- feols(engl ~ risk_unemp       | id + wave, data = panel_risk_noage_eng, cluster = "id")
+m_engl_risk_age   <- feols(engl ~ risk_unemp + age | id + wave, data = panel_risk_age_eng,   cluster = "id")
+
+modelsummary(
+  list("No age" = m_engl_risk_noage, "Age" = m_engl_risk_age),
+  coef_rename = c(risk_unemp = "Unemployment risk", age = "Age"),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A4.5. Auxiliary: Does Unemployment Risk Predict Within-Person Change in Englishness?",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Dependent variable: Englishness (1–7).",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# A.8.5 Categorical Robustness (Britishness and Englishness) {#sec-a8-categorical}
+
+All models in Sections A.8.1–A.8.4 treat national identity as a continuous linear predictor. This section re-estimates the key specifications with identity entered as an ordered categorical variable (six dummies, reference category = 7, the strongest identifiers). The monotonic gradient documented in the continuous models is preserved across all identity positions; interaction terms with income and unemployment risk remain negligible throughout.
+
+## A.8.5.1 Britishness {#sec-a8-cat-brit}
+
+```{r cat-brit-base}
+m1_cat <- feols(dv ~ i(brit, ref = 7)       | id + wave, data = panel_self, cluster = "id")
+m2_cat <- feols(dv ~ i(brit, ref = 7) + age | id + wave, data = panel_self, cluster = "id")
+
+modelsummary(
+  list("No age" = m1_cat, "Age" = m2_cat),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.1. Britishness (Categorical) and Immigration Attitudes",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Britishness = 7 (strongest identifier).",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r cat-brit-wave-plot, fig.cap="Figure A5.1. Wave-specific categorical Britishness differences relative to Britishness = 7. Individual FE only."}
+m_wave_cat <- feols(dv ~ i(wave, brit, ref = 7) | id, data = panel_self, cluster = "id")
+iplot(m_wave_cat, xlab = "Wave", main = "")
+```
+
+```{r cat-brit-income}
+m_inc_cat_1 <- feols(dv ~ i(brit, ref = 7) + income + age         | id + wave, data = panel_income_age,   cluster = "id")
+m_inc_cat_2 <- feols(dv ~ i(brit, ref = 7) * income + age         | id + wave, data = panel_income_age,   cluster = "id")
+m_eq03_cat_1 <- feols(dv ~ i(brit, ref = 7) + income_eq_child03 + age | id + wave, data = panel_eq03_age, cluster = "id")
+m_eq03_cat_2 <- feols(dv ~ i(brit, ref = 7) * income_eq_child03 + age | id + wave, data = panel_eq03_age, cluster = "id")
+m_eq05_cat_1 <- feols(dv ~ i(brit, ref = 7) + income_eq_child05 + age | id + wave, data = panel_eq05_age, cluster = "id")
+m_eq05_cat_2 <- feols(dv ~ i(brit, ref = 7) * income_eq_child05 + age | id + wave, data = panel_eq05_age, cluster = "id")
+
+modelsummary(
+  list(
+    "Raw: additive"    = m_inc_cat_1,
+    "Raw: interaction" = m_inc_cat_2,
+    "Eq03: additive"   = m_eq03_cat_1,
+    "Eq03: interaction"= m_eq03_cat_2,
+    "Eq05: additive"   = m_eq05_cat_1,
+    "Eq05: interaction"= m_eq05_cat_2
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.2. Britishness (Categorical) × Income: All Operationalisations",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Britishness = 7.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r cat-brit-risk}
+m_risk_cat_1 <- feols(dv ~ i(brit, ref = 7) + risk_unemp + age | id + wave, data = panel_risk_age, cluster = "id")
+m_risk_cat_2 <- feols(dv ~ i(brit, ref = 7) * risk_unemp + age | id + wave, data = panel_risk_age, cluster = "id")
+
+modelsummary(
+  list("Additive" = m_risk_cat_1, "Interaction" = m_risk_cat_2),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.3. Britishness (Categorical) × Unemployment Risk",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Britishness = 7.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+## A.8.5.2 Englishness {#sec-a8-cat-engl}
+
+```{r cat-engl-base}
+m1_eng_cat <- feols(dv ~ i(engl_num, ref = 7)       | id + wave, data = panel_self_eng, cluster = "id")
+m2_eng_cat <- feols(dv ~ i(engl_num, ref = 7) + age | id + wave, data = panel_self_eng, cluster = "id")
+
+modelsummary(
+  list("No age" = m1_eng_cat, "Age" = m2_eng_cat),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.4. Englishness (Categorical) and Immigration Attitudes",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Englishness = 7 (strongest identifier).",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r cat-engl-wave-plot, fig.cap="Figure A5.2. Wave-specific categorical Englishness differences relative to Englishness = 7. Individual FE only."}
+m_wave_eng_cat <- feols(dv ~ i(wave, engl_num, ref = 7) | id, data = panel_self_eng, cluster = "id")
+iplot(m_wave_eng_cat, xlab = "Wave", main = "")
+```
+
+```{r cat-engl-income}
+m_eng_eq03_cat_1 <- feols(dv ~ i(engl_num, ref = 7) + income_eq_child03 + age | id + wave, data = panel_eng_eq03_age, cluster = "id")
+m_eng_eq03_cat_2 <- feols(dv ~ i(engl_num, ref = 7) * income_eq_child03 + age | id + wave, data = panel_eng_eq03_age, cluster = "id")
+m_eng_eq05_cat_1 <- feols(dv ~ i(engl_num, ref = 7) + income_eq_child05 + age | id + wave, data = panel_eng_eq05_age, cluster = "id")
+m_eng_eq05_cat_2 <- feols(dv ~ i(engl_num, ref = 7) * income_eq_child05 + age | id + wave, data = panel_eng_eq05_age, cluster = "id")
+
+modelsummary(
+  list(
+    "Eq03: additive"    = m_eng_eq03_cat_1,
+    "Eq03: interaction" = m_eng_eq03_cat_2,
+    "Eq05: additive"    = m_eng_eq05_cat_1,
+    "Eq05: interaction" = m_eng_eq05_cat_2
+  ),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.5. Englishness (Categorical) × Equivalised Income",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Englishness = 7.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+```{r cat-engl-risk}
+m_risk_eng_cat_1 <- feols(dv ~ i(engl_num, ref = 7) + risk_unemp + age | id + wave, data = panel_risk_age_eng, cluster = "id")
+m_risk_eng_cat_2 <- feols(dv ~ i(engl_num, ref = 7) * risk_unemp + age | id + wave, data = panel_risk_age_eng, cluster = "id")
+
+modelsummary(
+  list("Additive" = m_risk_eng_cat_1, "Interaction" = m_risk_eng_cat_2),
+  gof_map    = GOF_MAP,
+  stars      = c("*" = .05, "**" = .01, "***" = .001),
+  title      = "Table A5.6. Englishness (Categorical) × Unemployment Risk",
+  notes      = "OLS with individual and wave FE. SEs clustered by respondent. Reference category: Englishness = 7.",
+  output     = "kableExtra",
+  escape = FALSE
+) |> 
+  kableExtra::kable_styling()
+```
+
+------------------------------------------------------------------------
+
+*End of Appendix A.*

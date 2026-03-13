@@ -1,0 +1,549 @@
+---
+title: "Online Appendix A.6: Micro-Level Models — Random Effects"
+subtitle: "Estimator Comparison for H1 and H2 (Britishness and Englishness)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(haven)
+library(purrr)
+library(lme4)
+library(lmerTest)
+library(modelsummary)
+library(kableExtra)
+
+options(modelsummary_factory_default = "kableExtra")
+
+GOF_MAP <- tribble(
+  ~raw,            ~clean,   ~fmt,
+  "nobs",          "Observations", 0,
+  "adj.r.squared", "Adj. R²",      3,
+  "r.squared",     "R²",           3,
+  "AIC",           "AIC",          1,
+  "BIC",           "BIC",          1
+)
+
+# bobyqa + fixed wave dummies: no wave-level variance to estimate,
+# so convergence is fast and reliable
+ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE     <- "immigSelf"
+BRIT_BASE   <- "britishness"
+ENG_BASE    <- "englishness"
+TIME_BASE   <- "starttime"
+AGE_BASE    <- "age"
+INCOME_BASE <- "income"
+RISK_BASE   <- "riskUnemployment"
+
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+make_long_with_age <- function(df, dv_base, brit_base, time_base, age_base) {
+  waves <- Reduce(intersect, list(
+    waves_available(df, dv_base),
+    waves_available(df, brit_base),
+    waves_available(df, time_base),
+    waves_available(df, age_base)
+  ))
+  if (length(waves) < 3) stop("Too few overlapping waves.")
+
+  df |>
+    mutate(
+      across(paste0(dv_base,   "W", waves), ~ as.numeric(zap_labels(.x))),
+      across(paste0(brit_base, "W", waves), ~ as.numeric(zap_labels(.x))),
+      across(paste0(age_base,  "W", waves), ~ as.numeric(zap_labels(.x)))
+    ) |>
+    select(id,
+           all_of(paste0(dv_base,   "W", waves)),
+           all_of(paste0(brit_base, "W", waves)),
+           all_of(paste0(time_base, "W", waves)),
+           all_of(paste0(age_base,  "W", waves))) |>
+    pivot_longer(cols = -id,
+                 names_to  = c(".value", "wave"),
+                 names_pattern = "(.+)W(\\d+)$") |>
+    mutate(
+      wave             = as.integer(wave),
+      starttime_chr    = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed,
+                                  suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(dv = all_of(dv_base), brit = all_of(brit_base), age = all_of(age_base)) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+make_long_with_income <- function(df, dv_base, brit_base, time_base,
+                                  income_base, age_base = NULL) {
+  waves <- Reduce(intersect, list(
+    waves_available(df, dv_base),
+    waves_available(df, brit_base),
+    waves_available(df, time_base),
+    waves_available(df, income_base)
+  ))
+  if (!is.null(age_base)) waves <- intersect(waves, waves_available(df, age_base))
+  if (length(waves) < 3) stop("Too few overlapping waves.")
+
+  age_cols <- if (!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  out <- df |>
+    mutate(
+      across(paste0(dv_base,     "W", waves), ~ as.numeric(haven::zap_labels(.x))),
+      across(paste0(brit_base,   "W", waves), ~ as.numeric(haven::zap_labels(.x))),
+      across(paste0(income_base, "W", waves), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),                ~ as.numeric(haven::zap_labels(.x)))
+    ) |>
+    select(id,
+           all_of(paste0(dv_base,     "W", waves)),
+           all_of(paste0(brit_base,   "W", waves)),
+           all_of(paste0(time_base,   "W", waves)),
+           all_of(paste0(income_base, "W", waves)),
+           all_of(age_cols)) |>
+    pivot_longer(cols = -id,
+                 names_to  = c(".value", "wave"),
+                 names_pattern = "(.+)W(\\d+)$") |>
+    mutate(
+      wave             = as.integer(wave),
+      starttime_chr    = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed,
+                                  suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(dv = all_of(dv_base), brit = all_of(brit_base), income = all_of(income_base))
+
+  if (!is.null(age_base) && age_base %in% names(out))
+    out <- out |> rename(age = all_of(age_base))
+
+  out |> filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+```
+
+```{r build-panels, include=FALSE}
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+
+panel_self_eng <- make_long_with_age(df, DV_BASE, ENG_BASE, TIME_BASE, AGE_BASE) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds") |>
+  mutate(id = as.character(id), wave = as.integer(wave))
+
+panel_income_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE)
+panel_income_age   <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, AGE_BASE)
+
+panel_eq_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE) |>
+  left_join(eq_long, by = c("id", "wave"))
+panel_eq_age <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, INCOME_BASE, AGE_BASE) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq03_noage <- panel_eq_noage |> filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   |> filter(!is.na(income_eq_child03))
+panel_eq05_noage <- panel_eq_noage |> filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   |> filter(!is.na(income_eq_child05))
+
+panel_risk_noage <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, RISK_BASE) |>
+  rename(risk_unemp = income) |>
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) |>
+  filter(!is.na(risk_unemp))
+
+panel_risk_age <- make_long_with_income(df, DV_BASE, BRIT_BASE, TIME_BASE, RISK_BASE, AGE_BASE) |>
+  rename(risk_unemp = income) |>
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) |>
+  filter(!is.na(risk_unemp))
+
+panel_eng_eq_noage <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, INCOME_BASE) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_)) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, INCOME_BASE, AGE_BASE) |>
+  rename(engl = brit) |>
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_)) |>
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq03_noage <- panel_eng_eq_noage |> filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   |> filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq05_noage <- panel_eng_eq_noage |> filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   |> filter(!is.na(engl), !is.na(income_eq_child05))
+
+panel_risk_noage_eng <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, RISK_BASE) |>
+  rename(engl = brit, risk_unemp = income) |>
+  mutate(engl       = if_else(engl %in% 1:7, engl, NA_real_),
+         risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_))
+
+panel_risk_age_eng <- make_long_with_income(df, DV_BASE, ENG_BASE, TIME_BASE, RISK_BASE, AGE_BASE) |>
+  rename(engl = brit, risk_unemp = income) |>
+  mutate(engl       = if_else(engl %in% 1:7, engl, NA_real_),
+         risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_))
+
+add_brit_cat <- function(d) {
+  d |> mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+}
+add_engl_cat <- function(d) {
+  d |>
+    mutate(engl_num = as.numeric(engl),
+           engl_num = if_else(engl_num %in% 1:7, engl_num, NA_real_),
+           engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")) |>
+    filter(!is.na(engl_num))
+}
+
+panel_self         <- add_brit_cat(panel_self)
+panel_income_noage <- add_brit_cat(panel_income_noage)
+panel_income_age   <- add_brit_cat(panel_income_age)
+panel_eq03_noage   <- add_brit_cat(panel_eq03_noage)
+panel_eq03_age     <- add_brit_cat(panel_eq03_age)
+panel_eq05_noage   <- add_brit_cat(panel_eq05_noage)
+panel_eq05_age     <- add_brit_cat(panel_eq05_age)
+panel_risk_noage   <- add_brit_cat(panel_risk_noage)
+panel_risk_age     <- add_brit_cat(panel_risk_age)
+
+panel_self_eng       <- add_engl_cat(panel_self_eng)
+panel_eng_eq03_noage <- add_engl_cat(panel_eng_eq03_noage)
+panel_eng_eq03_age   <- add_engl_cat(panel_eng_eq03_age)
+panel_eng_eq05_noage <- add_engl_cat(panel_eng_eq05_noage)
+panel_eng_eq05_age   <- add_engl_cat(panel_eng_eq05_age)
+panel_risk_noage_eng <- add_engl_cat(panel_risk_noage_eng)
+panel_risk_age_eng   <- add_engl_cat(panel_risk_age_eng)
+```
+
+---
+
+This appendix reports random-effects (RE) equivalents of the fixed-effects models in Appendix A. All RE models are estimated via REML with a random intercept for respondent (`1|id`); wave effects are modelled as fixed dummies (`factor(wave)`), consistent with the identification strategy of the main fixed-effects models and avoiding the instability of estimating a wave-level variance from the small number of available waves. Unlike the individual fixed-effects estimator, the RE estimator draws on both within- and between-person covariance. Consequently, RE identity coefficients are substantially larger than their FE counterparts throughout: they reflect the combined association of stable differences in national identification across respondents and within-person change over time, rather than the within-individual variation alone. Where RE and FE interaction terms converge — returning similar signs, magnitudes, and significance — this strengthens confidence in the underlying signal. Where they diverge, the divergence is itself informative: a significant RE interaction alongside a null FE interaction indicates that the apparent moderation reflects stable cross-sectional sorting of more nationally identified respondents into structurally different economic positions, rather than within-individual activation of the kind H2 requires. This interpretive frame applies throughout Sections A.6.1–A.6.5.
+
+---
+
+# A.6.1 H1: Baseline Models (Britishness) {#sec-re-h1-brit}
+
+The RE Britishness coefficients are considerably larger in magnitude than the FE estimates in Appendix A.1, as expected: the between-person component — more strongly British respondents holding persistently more restrictive preferences in cross-section — is substantial. The direction and significance of the effect are identical across estimators.
+
+```{r re-h1-brit}
+m1_re <- lmer(dv ~ brit       + factor(wave) + (1|id), data = panel_self, REML = TRUE, control = ctrl)
+m2_re <- lmer(dv ~ brit + age + factor(wave) + (1|id), data = panel_self, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m1_re, "(2) Age" = m2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", age = "Age"),
+  gof_map     = GOF_MAP,
+  stars       = c("*" = .05, "**" = .01, "***" = .001),
+  title       = "Table A6.1. Britishness and Immigration Attitudes: Random-Effects Baseline",
+  notes       = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape      = FALSE,
+  output      = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# A.6.2 H2: Income Moderation (Britishness) {#sec-re-h2-brit-income}
+
+Tables A6.2–A6.4 report RE income moderation models for Britishness. The raw income main effect is positive and significant under RE — reflecting the cross-sectional association between household resources and immigration preferences that the individual FE absorbs — in contrast to its nullity in Appendix A.2. The Britishness × equivalised income interaction is marginally significant in the RE specifications, and its sign is negative, opposite to the activation prediction of H2. This pattern is consistent with a compositional story in which more affluent, more strongly British-identified respondents hold more restrictive preferences in cross-section. The FE null, which isolates within-person variation, remains the appropriate test of H2.
+
+```{r re-h2-brit-raw-income}
+m_inc_1_re <- lmer(dv ~ brit + income + age + factor(wave) + (1|id), data = panel_income_age, REML = TRUE, control = ctrl)
+m_inc_2_re <- lmer(dv ~ brit * income + age + factor(wave) + (1|id), data = panel_income_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_inc_1_re, "(2) Interaction" = m_inc_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", income = "Income",
+                  "brit:income" = "Britishness × Income", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.2. Britishness × Raw Income: Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-h2-brit-eq03}
+m_eq03_1_re <- lmer(dv ~ brit + income_eq_child03 + age + factor(wave) + (1|id), data = panel_eq03_age, REML = TRUE, control = ctrl)
+m_eq03_2_re <- lmer(dv ~ brit * income_eq_child03 + age + factor(wave) + (1|id), data = panel_eq03_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_eq03_1_re, "(2) Interaction" = m_eq03_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness",
+                  income_eq_child03 = "Eq. income (w = 0.3)",
+                  "brit:income_eq_child03" = "Britishness × Eq. income",
+                  age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.3. Britishness × Equivalised Income (w = 0.3): Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-h2-brit-eq05}
+m_eq05_1_re <- lmer(dv ~ brit + income_eq_child05 + age + factor(wave) + (1|id), data = panel_eq05_age, REML = TRUE, control = ctrl)
+m_eq05_2_re <- lmer(dv ~ brit * income_eq_child05 + age + factor(wave) + (1|id), data = panel_eq05_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_eq05_1_re, "(2) Interaction" = m_eq05_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness",
+                  income_eq_child05 = "Eq. income (w = 0.5)",
+                  "brit:income_eq_child05" = "Britishness × Eq. income",
+                  age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.4. Britishness × Equivalised Income (w = 0.5): Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# A.6.3 H2: Unemployment Risk Moderation (Britishness) {#sec-re-h2-brit-risk}
+
+The RE unemployment risk interactions are negative and significant for Britishness, in direct contrast to the near-zero FE interaction in Appendix A.3. This is the clearest estimator divergence in the micro-level analysis. As discussed in Section 4.2 of the main text, individuals who are persistently more nationally identified also tend to be persistently more sensitive to unemployment risk in their immigration preferences — a cross-sectional sorting pattern that the between-person component of the RE estimator captures but the individual FE absorbs. Table A6.6 confirms the auxiliary diagnostic: within individuals, increases in perceived unemployment risk do not predict increases in Britishness; if anything the relationship is weakly negative.
+
+```{r re-h2-brit-risk}
+m_risk_1_re <- lmer(dv ~ brit + risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age, REML = TRUE, control = ctrl)
+m_risk_2_re <- lmer(dv ~ brit * risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_risk_1_re, "(2) Interaction" = m_risk_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", risk_unemp = "Unemployment risk",
+                  "brit:risk_unemp" = "Britishness × Risk", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.5. Britishness × Unemployment Risk: Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Risk measured on 0–10 scale.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-h2-brit-risk-diagnostic}
+m_brit_risk_noage_re <- lmer(brit ~ risk_unemp       + factor(wave) + (1|id), data = panel_risk_noage, REML = TRUE, control = ctrl)
+m_brit_risk_re       <- lmer(brit ~ risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age,   REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m_brit_risk_noage_re, "(2) Age" = m_brit_risk_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(risk_unemp = "Unemployment risk", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.6. Auxiliary: Does Unemployment Risk Predict Britishness? (Random Effects)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Dependent variable: Britishness (1–7).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# A.6.4 H1 and H2: Englishness Models {#sec-re-h1-h2-engl}
+
+The Englishness RE pattern closely parallels the Britishness results across all three economic indicators. The baseline Englishness coefficient is large and negative — again reflecting the combined within- and between-person association. For income moderation, the RE Englishness × equivalised income interaction is positive and clearly significant, indicating that wealthier respondents show a stronger negative association between Englishness and immigration preferences in cross-section; this sign is opposite to the activation prediction of H2 and is consistent with between-person sorting rather than within-individual activation. For unemployment risk, the RE Englishness × risk interaction is negative and significant, mirroring the Britishness pattern and carrying the same interpretation: the divergence from the FE null reflects stable sorting, not within-person dynamics.
+
+## A.6.4.1 Baseline {#sec-re-h1-engl}
+
+```{r re-h1-engl}
+m1_eng_re <- lmer(dv ~ engl       + factor(wave) + (1|id), data = panel_self_eng, REML = TRUE, control = ctrl)
+m2_eng_re <- lmer(dv ~ engl + age + factor(wave) + (1|id), data = panel_self_eng, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m1_eng_re, "(2) Age" = m2_eng_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", age = "Age"),
+  gof_map     = GOF_MAP,
+  stars       = c("*" = .05, "**" = .01, "***" = .001),
+  title       = "Table A6.7. Englishness and Immigration Attitudes: Random-Effects Baseline",
+  notes       = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape      = FALSE,
+  output      = "kableExtra"
+) |> kable_styling()
+```
+
+## A.6.4.2 Income Moderation {#sec-re-h2-engl-income}
+
+```{r re-h2-engl-eq03}
+m_eng_eq03_1_re <- lmer(dv ~ engl + income_eq_child03 + age + factor(wave) + (1|id), data = panel_eng_eq03_age, REML = TRUE, control = ctrl)
+m_eng_eq03_2_re <- lmer(dv ~ engl * income_eq_child03 + age + factor(wave) + (1|id), data = panel_eng_eq03_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_eng_eq03_1_re, "(2) Interaction" = m_eng_eq03_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness",
+                  income_eq_child03 = "Eq. income (w = 0.3)",
+                  "engl:income_eq_child03" = "Englishness × Eq. income",
+                  age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.8. Englishness × Equivalised Income (w = 0.3): Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-h2-engl-eq05}
+m_eng_eq05_1_re <- lmer(dv ~ engl + income_eq_child05 + age + factor(wave) + (1|id), data = panel_eng_eq05_age, REML = TRUE, control = ctrl)
+m_eng_eq05_2_re <- lmer(dv ~ engl * income_eq_child05 + age + factor(wave) + (1|id), data = panel_eng_eq05_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_eng_eq05_1_re, "(2) Interaction" = m_eng_eq05_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness",
+                  income_eq_child05 = "Eq. income (w = 0.5)",
+                  "engl:income_eq_child05" = "Englishness × Eq. income",
+                  age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.9. Englishness × Equivalised Income (w = 0.5): Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. SEs in parentheses.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## A.6.4.3 Unemployment Risk Moderation {#sec-re-h2-engl-risk}
+
+```{r re-h2-engl-risk}
+m_risk_eng_1_re <- lmer(dv ~ engl + risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age_eng, REML = TRUE, control = ctrl)
+m_risk_eng_2_re <- lmer(dv ~ engl * risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age_eng, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_risk_eng_1_re, "(2) Interaction" = m_risk_eng_2_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", risk_unemp = "Unemployment risk",
+                  "engl:risk_unemp" = "Englishness × Risk", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.10. Englishness × Unemployment Risk: Random Effects",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Risk measured on 0–10 scale.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-h2-engl-risk-diagnostic}
+m_engl_risk_noage_re <- lmer(engl ~ risk_unemp       + factor(wave) + (1|id), data = panel_risk_noage_eng, REML = TRUE, control = ctrl)
+m_engl_risk_re       <- lmer(engl ~ risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age_eng,   REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m_engl_risk_noage_re, "(2) Age" = m_engl_risk_re),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(risk_unemp = "Unemployment risk", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table A6.11. Auxiliary: Does Unemployment Risk Predict Englishness? (Random Effects)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Dependent variable: Englishness (1–7).",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# A.6.5 Categorical Robustness (Britishness and Englishness) {#sec-re-categorical}
+
+The categorical RE specifications preserve the monotonic identity gradient documented throughout Appendix A.5. For unemployment risk, the categorical RE interactions are significant at multiple identity positions for both Britishness and Englishness — driven by the between-person component that the FE design removes — and their concentration among weaker identifiers is consistent with the FE categorical pattern described in Appendix A.5. Income interaction terms are not reported here as the between-person income sorting documented in the continuous RE models does not reflect a coherent activation gradient; the FE categorical income results in Appendix A.5 remain the appropriate reference.
+
+## A.6.5.1 Britishness {#sec-re-cat-brit}
+
+```{r re-cat-brit-base}
+m1_cat_re <- lmer(dv ~ brit_cat       + factor(wave) + (1|id), data = panel_self, REML = TRUE, control = ctrl)
+m2_cat_re <- lmer(dv ~ brit_cat + age + factor(wave) + (1|id), data = panel_self, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m1_cat_re, "(2) Age" = m2_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table A6.12. Britishness (Categorical) Baseline: Random Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-cat-brit-risk}
+m_risk_cat_1_re <- lmer(dv ~ brit_cat + risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age, REML = TRUE, control = ctrl)
+m_risk_cat_2_re <- lmer(dv ~ brit_cat * risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_risk_cat_1_re, "(2) Interaction" = m_risk_cat_2_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table A6.13. Britishness (Categorical) × Unemployment Risk: Random Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+## A.6.5.2 Englishness {#sec-re-cat-engl}
+
+```{r re-cat-engl-base}
+m1_eng_cat_re <- lmer(dv ~ engl_cat       + factor(wave) + (1|id), data = panel_self_eng, REML = TRUE, control = ctrl)
+m2_eng_cat_re <- lmer(dv ~ engl_cat + age + factor(wave) + (1|id), data = panel_self_eng, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) No age" = m1_eng_cat_re, "(2) Age" = m2_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table A6.14. Englishness (Categorical) Baseline: Random Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r re-cat-engl-risk}
+m_risk_eng_cat_1_re <- lmer(dv ~ engl_cat + risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age_eng, REML = TRUE, control = ctrl)
+m_risk_eng_cat_2_re <- lmer(dv ~ engl_cat * risk_unemp + age + factor(wave) + (1|id), data = panel_risk_age_eng, REML = TRUE, control = ctrl)
+
+modelsummary(
+  list("(1) Additive" = m_risk_eng_cat_1_re, "(2) Interaction" = m_risk_eng_cat_2_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table A6.15. Englishness (Categorical) × Unemployment Risk: Random Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+*End of Appendix A.6.*
