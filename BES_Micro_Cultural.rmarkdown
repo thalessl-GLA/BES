@@ -1,0 +1,1570 @@
+---
+title: "BES_Micro_Cultural"
+format: html
+editor: visual
+---
+
+```{r 0, include=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds")
+
+DV_BASE   <- "immigCultural"
+BRIT_BASE <- "britishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"   
+
+get_wave_num2 <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available2 <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num2)))
+}
+
+make_long_with_age <- function(df,
+                               dv_base   = "immigCultural",
+                               brit_base = "britishness",
+                               time_base = "starttime",
+                               age_base  = "age"){
+
+  w_dv   <- waves_available2(df, dv_base)
+  w_brit <- waves_available2(df, brit_base)
+  w_time <- waves_available2(df, time_base)
+  w_age  <- waves_available2(df, age_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_age))
+  if(length(waves) < 3) stop("Too few overlapping waves across DV, britishness, starttime, and age.")
+
+  dv_cols   <- paste0(dv_base,   "W", waves)
+  brit_cols <- paste0(brit_base, "W", waves)
+  time_cols <- paste0(time_base, "W", waves)
+  age_cols  <- paste0(age_base,  "W", waves)
+
+  # Drop haven labels to avoid pivot_longer attribute conflicts
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),   ~ as.numeric(zap_labels(.x))),
+      across(all_of(brit_cols), ~ as.numeric(zap_labels(.x))),
+      across(all_of(age_cols),  ~ as.numeric(zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id, all_of(dv_cols), all_of(brit_cols), all_of(time_cols), all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(starttime_parsed, suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv   = all_of(dv_base),
+      brit = all_of(brit_base),
+      age  = all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(age), !is.na(wave))
+}
+
+panel_self <- make_long_with_age(df, DV_BASE, BRIT_BASE, TIME_BASE, AGE_BASE)
+```
+
+```{r 1 sanity, warning=FALSE, message=FALSE, echo=FALSE}
+# Quick sanity print
+panel_self |>
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    min_wave = min(wave),
+    max_wave = max(wave),
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE),
+    age_min = min(age, na.rm = TRUE),
+    age_max = max(age, na.rm = TRUE)
+  )
+```
+
+## Micro level results
+
+### Base Models
+
+```{r models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Model 1
+
+m1 <- feols(
+  dv ~ brit | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+m1
+
+# Model 2
+
+
+  m2 <- feols(
+    dv ~ brit + age | id + wave,
+    data = panel_self,
+    cluster = "id"
+  )
+m2
+
+```
+
+```{r flexible wave, echo=FALSE, warning=FALSE, message=FALSE}
+
+m_wave <- feols(
+  dv ~ i(wave, brit) | id,
+  data = panel_self,
+  cluster = "id"
+)
+
+summary(m_wave)
+
+iplot(
+  m_wave,
+  xlab = "Wave",
+  main = "Wave-specific effect of Britishness on immigration self-placement"
+)
+
+```
+
+### Economic Context Moderation: Individual Income
+
+```{r income 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+INCOME_BASE <- "income"   # <-- THIS is the correct BES income measure
+
+# ---------- helpers ----------
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base){
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+# ---------- build long panel with income ----------
+make_long_with_income <- function(df,
+                                  dv_base,
+                                  brit_base,
+                                  time_base,
+                                  income_base,
+                                  age_base = NULL){
+
+  w_dv     <- waves_available(df, dv_base)
+  w_brit   <- waves_available(df, brit_base)
+  w_time   <- waves_available(df, time_base)
+  w_income <- waves_available(df, income_base)
+
+  waves <- Reduce(intersect, list(w_dv, w_brit, w_time, w_income))
+
+  if(!is.null(age_base)){
+    w_age <- waves_available(df, age_base)
+    waves <- intersect(waves, w_age)
+  }
+
+  if(length(waves) < 3){
+    stop("Too few overlapping waves across DV, britishness, time, income (and age).")
+  }
+
+  dv_cols     <- paste0(dv_base,     "W", waves)
+  brit_cols   <- paste0(brit_base,   "W", waves)
+  time_cols   <- paste0(time_base,   "W", waves)
+  income_cols <- paste0(income_base, "W", waves)
+  age_cols    <- if(!is.null(age_base)) paste0(age_base, "W", waves) else NULL
+
+  df2 <- df |>
+    mutate(
+      across(all_of(dv_cols),     ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(brit_cols),   ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(income_cols), ~ as.numeric(haven::zap_labels(.x))),
+      across(all_of(age_cols),    ~ as.numeric(haven::zap_labels(.x)))
+    )
+
+  df2 |>
+    select(id,
+           all_of(dv_cols),
+           all_of(brit_cols),
+           all_of(time_cols),
+           all_of(income_cols),
+           all_of(age_cols)) |>
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) |>
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[time_base]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) |>
+    rename(
+      dv     = all_of(dv_base),
+      brit   = all_of(brit_base),
+      income = all_of(income_base),
+      age    = if(!is.null(age_base)) all_of(age_base)
+    ) |>
+    filter(!is.na(dv), !is.na(brit), !is.na(income), !is.na(wave))
+}
+
+# ---------- Panel A: without age ----------
+panel_income_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = NULL
+)
+
+# ---------- Panel B: with age ----------
+panel_income_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  INCOME_BASE,
+  age_base = AGE_BASE
+)
+
+# ---------- Models ----------
+# (0.1) Income  SOLE, WITHOUT age
+m_inc_0.1 <- feols(
+  dv ~ income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (1) Income  WITHOUT age
+m_inc_1 <- feols(
+  dv ~ brit + income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (0.2) Income  WITH age
+m_inc_0.2 <- feols(
+  dv ~ income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# (2) Income  SOLE, WITH age
+m_inc_2 <- feols(
+  dv ~ brit + income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# (3) Income moderation WITHOUT age
+m_inc_3 <- feols(
+  dv ~ brit * income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+# (4) Income moderation WITH age
+m_inc_4 <- feols(
+  dv ~ brit * income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+```
+
+```{r income 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_inc_0.1)
+summary(m_inc_1)
+summary(m_inc_2)
+summary(m_inc_0.2)
+summary(m_inc_3)
+summary(m_inc_4)
+```
+
+```{r income_equivalised, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+# ============================================================
+#Equivalised household income (ONS OECD-modified scale)
+# ============================================================
+# This chunk:
+# 1) Loads the derived equivalised income file (id-wave)
+# 2) Joins it to a long panel (built with the same DV/brit/time structure)
+# 3) Estimates the same FE specifications using equivalised income
+#
+
+# --- Load equivalised income (constructed externally; keyed by id + wave) ---
+eq_long <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/equivalised_income_long.rds")
+
+eq_long <- eq_long %>%
+  mutate(
+    id   = as.character(id),
+    wave = as.integer(wave)
+  )
+
+
+# --- Build long panels using the same infrastructure as the income models ---
+# use make_long_with_income() but feed any income_base that exists across waves.
+# Here, the *original* income base only to create the canonical long structure,
+# then merge equivalised income by (id, wave).
+panel_eq_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,   # uses your existing income base to ensure overlap
+  age_base = NULL
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+panel_eq_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base = AGE_BASE
+) %>%
+  left_join(eq_long, by = c("id", "wave"))
+
+# --- Sanity check: merge worked and missingness is as expected ---
+panel_eq_age %>%
+  summarise(
+    n_obs = n(),
+    n_ids = n_distinct(id),
+    share_eq03_missing = mean(is.na(income_eq_child03)),
+    share_eq05_missing = mean(is.na(income_eq_child05))
+  )
+
+# ============================================================
+# Models with equivalised income
+# ============================================================
+
+# --- Prepare analysis samples (explicit, avoids silent failures) ---
+panel_eq03_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child03))
+panel_eq03_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child03))
+
+panel_eq05_noage <- panel_eq_noage %>% filter(!is.na(income_eq_child05))
+panel_eq05_age   <- panel_eq_age   %>% filter(!is.na(income_eq_child05))
+
+# --- Sanity checks: fail fast with a clear message if merge/coverage is an issue ---
+if(nrow(panel_eq03_noage) == 0 || nrow(panel_eq03_age) == 0){
+  stop("No non-missing income_eq_child03 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+if(nrow(panel_eq05_noage) == 0 || nrow(panel_eq05_age) == 0){
+  stop("No non-missing income_eq_child05 observations after merge. Check (id,wave) join and missingness in eq_long.")
+}
+
+# --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_0.1 <- feols(
+  dv ~ income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_1 <- feols(
+  dv ~ brit + income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_0.2 <- feols(
+  dv ~ income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_2 <- feols(
+  dv ~ brit + income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_3 <- feols(
+  dv ~ brit * income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_4 <- feols(
+  dv ~ brit * income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+# --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_0.1 <- feols(
+  dv ~ income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_1 <- feols(
+  dv ~ brit + income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_0.2 <- feols(
+  dv ~ income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_2 <- feols(
+  dv ~ brit + income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_3 <- feols(
+  dv ~ brit * income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_4 <- feols(
+  dv ~ brit * income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+```
+
+```{r income_equivalised_results 1, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound A: child weight = 0.3 (lower bound)
+summary(m_eq03_0.1)
+summary(m_eq03_1)
+summary(m_eq03_0.2)
+summary(m_eq03_2)
+summary(m_eq03_3)
+summary(m_eq03_4)
+
+```
+
+```{r income_equivalised_results 2, echo=FALSE, warning=FALSE, message=FALSE}
+# Bound B: child weight = 0.5 (upper bound)
+summary(m_eq05_0.1)
+summary(m_eq05_1)
+summary(m_eq05_0.2)
+summary(m_eq05_2)
+summary(m_eq05_3)
+summary(m_eq05_4)
+
+```
+
+### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r risk 0, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+
+RISK_BASE <- "riskUnemployment"
+
+# ---------- build long panel ----------
+panel_risk_noage <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,
+  age_base = NULL
+)
+
+# rename first (income -> risk_unemp), then clean
+panel_risk_noage <- panel_risk_noage %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
+
+panel_risk_age <- make_long_with_income(
+  df,
+  DV_BASE,
+  BRIT_BASE,
+  TIME_BASE,
+  income_base = RISK_BASE,
+  age_base = AGE_BASE
+) %>%
+  rename(risk_unemp = income) %>%
+  mutate(risk_unemp = if_else(between(risk_unemp, 0, 10), risk_unemp, NA_real_)) %>%
+  filter(!is.na(risk_unemp))
+
+
+# ---------- Models ----------
+# (0.1) Risk sole, no age
+m_risk_0.1 <- feols(
+  dv ~ risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (1) Main effects, no age
+m_risk_1 <- feols(
+  dv ~ brit + risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (0.2) risk sole, with age
+m_risk_0.2 <- feols(
+  dv ~ risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# (2) Main effects, with age
+m_risk_2 <- feols(
+  dv ~ brit + risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# (3) Moderation, no age
+m_risk_3 <- feols(
+  dv ~ brit * risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (4) Moderation, with age
+m_risk_4 <- feols(
+  dv ~ brit * risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+```
+
+summary(m_risk_1) summary(m_risk_2) summary(m_risk_3) summary(m_risk_4)
+
+```{r risk 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(m_risk_0.1)
+summary(m_risk_1)
+summary(m_risk_0.2)
+summary(m_risk_2)
+summary(m_risk_3)
+summary(m_risk_4)
+
+```
+
+```{r risk 2, echo=FALSE, warning=FALSE, message=FALSE}
+
+# ==========================================================
+# Diagnostic: Does unemployment risk predict Britishness?
+# ==========================================================
+
+# (5) Britishness ~ risk (no age)
+m_brit_risk_noage <- feols(
+  brit ~ risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+# (6) Britishness ~ risk + age
+m_brit_risk <- feols(
+  brit ~ risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+summary(m_brit_risk_noage)
+summary(m_brit_risk)
+
+```
+
+## Robustness Checks
+
+### Brittishness as Categorical
+
+```{r 0.1, include=FALSE, echo=FALSE}
+
+panel_self <- panel_self |>
+  mutate(
+    brit_cat = factor(brit, levels = 1:7),
+    brit_cat = relevel(brit_cat, ref = "7")
+  )
+
+panel_income_noage <- panel_income_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_income_age <- panel_income_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_noage <- panel_risk_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_risk_age <- panel_risk_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_noage <- panel_eq_noage |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+panel_eq_age <- panel_eq_age |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+
+```
+
+#### Base Models
+
+```{r brit cat 1, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Model 1 (categorical Britishness; 7 = base)
+m1_cat <- feols(
+  dv ~ i(brit, ref = 7) | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+# Model 2 (+ age)
+m2_cat <- feols(
+  dv ~ i(brit, ref = 7) + age | id + wave,
+  data = panel_self,
+  cluster = "id"
+)
+
+m_wave_cat <- feols(
+  dv ~ i(wave, brit, ref = 7) | id,
+  data = panel_self,
+  cluster = "id"
+)
+
+
+m1_cat
+m2_cat
+m_wave_cat
+
+iplot(
+  m_wave_cat,
+  xlab = "Wave",
+  main = "Wave-specific difference relative to Britishness = 7"
+)
+
+```
+
+#### Economic Context Moderation: Individual Income
+
+```{r brit cat 2, echo=FALSE, warning=FALSE, message=FALSE}
+# Income main effects (categorical Britishness)
+m_inc_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+m_inc_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# Income moderation (categorical Britishness × income)
+m_inc_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income | id + wave,
+  data = panel_income_noage,
+  cluster = "id"
+)
+
+m_inc_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income + age | id + wave,
+  data = panel_income_age,
+  cluster = "id"
+)
+
+# --- Bound A: child weight = 0.3 (lower bound) ---
+m_eq03_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+m_eq03_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child03 | id + wave,
+  data = panel_eq03_noage,
+  cluster = "id"
+)
+
+m_eq03_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child03 + age | id + wave,
+  data = panel_eq03_age,
+  cluster = "id"
+)
+
+# --- Bound B: child weight = 0.5 (upper bound) ---
+m_eq05_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+m_eq05_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child05 | id + wave,
+  data = panel_eq05_noage,
+  cluster = "id"
+)
+
+m_eq05_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * income_eq_child05 + age | id + wave,
+  data = panel_eq05_age,
+  cluster = "id"
+)
+
+summary(m_inc_cat_1)
+summary(m_inc_cat_2)
+summary(m_inc_cat_3)
+summary(m_inc_cat_4)
+summary(m_eq03_cat_1) 
+summary(m_eq03_cat_2) 
+summary(m_eq03_cat_3) 
+summary(m_eq03_cat_4)
+summary(m_eq05_cat_1) 
+summary(m_eq05_cat_2) 
+summary(m_eq05_cat_3) 
+summary(m_eq05_cat_4)
+
+
+```
+
+#### Economic Context Moderation: Individual risk (fear of unemployment)
+
+```{r brit cat 3, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Risk main effects (categorical Britishness)
+m_risk_cat_1 <- feols(
+  dv ~ i(brit, ref = 7) + risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+m_risk_cat_2 <- feols(
+  dv ~ i(brit, ref = 7) + risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+# Risk moderation (categorical Britishness × risk)
+m_risk_cat_3 <- feols(
+  dv ~ i(brit, ref = 7) * risk_unemp | id + wave,
+  data = panel_risk_noage,
+  cluster = "id"
+)
+
+m_risk_cat_4 <- feols(
+  dv ~ i(brit, ref = 7) * risk_unemp + age | id + wave,
+  data = panel_risk_age,
+  cluster = "id"
+)
+
+summary(m_risk_cat_1)
+summary(m_risk_cat_2)
+summary(m_risk_cat_3)
+summary(m_risk_cat_4)
+```
+
+### Other measures of nationalism
+
+```{r eng_brit_plot, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(haven)
+library(stringr)
+
+ids_wave <- df %>%
+  select(
+    id,
+    matches("^britishnessW\\d+$"),
+    matches("^englishnessW\\d+$")
+  ) %>%
+  mutate(across(-id, ~ as.numeric(zap_labels(.)))) %>%
+  pivot_longer(
+    cols = -id,
+    names_to = c("identity", "wave"),
+    names_pattern = "(britishness|englishness)W(\\d+)",
+    values_to = "value"
+  ) %>%
+  mutate(
+    wave = as.integer(wave),
+    identity = recode(identity,
+                      britishness = "Britishness",
+                      englishness = "Englishness"),
+    value = if_else(value %in% 1:7, value, NA_real_)
+  ) %>%
+  group_by(identity, wave) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
+
+ggplot(ids_wave, aes(wave, mean_value, color = identity)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Mean identity strength (1–7)",
+    color = "Identity",
+    title = "Evolution of Britishness and Englishness across BES waves"
+  )
+
+ids_wave_dm <- ids_wave %>%
+  group_by(identity) %>%
+  mutate(mean_dm = mean_value - mean(mean_value, na.rm = TRUE))
+
+ggplot(ids_wave_dm, aes(wave, mean_dm, color = identity)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "BES Wave",
+    y = "Deviation from identity mean",
+    color = "Identity",
+    title = "Within-wave change: Britishness vs Englishness"
+  )
+
+
+```
+
+```{r englishness_base_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# -------------------------------------------------------------------
+# Englishness (continuous) — Base micro models
+# -------------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+panel_self_eng <- make_long_with_age(
+  df,
+  dv_base   = DV_BASE,
+  brit_base = ENG_BASE,   
+  time_base = TIME_BASE,
+  age_base  = AGE_BASE
+) %>%
+  rename(engl = brit) %>%
+  mutate(engl = if_else(engl %in% 1:7, engl, NA_real_))
+
+# Model 1: Englishness only
+m1_eng <- feols(
+  dv ~ engl | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Model 2: + age
+m2_eng <- feols(
+  dv ~ engl + age | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Flexible wave-specific effect (ref = W7)
+m_wave_eng <- feols(
+  dv ~ i(wave, engl, ref = 7) | id,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+```
+
+```{r englishness_base_models_results, message=FALSE, warning=FALSE}
+
+m1_eng
+m2_eng
+summary(m_wave_eng)
+```
+
+```{r englishness_income_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ------------------------------------------------------------
+# Englishness × Equivalised income (OECD: child weight = 0.3 and 0.5)
+# Correctly cleans Englishness (drops 9999 etc.)
+# ------------------------------------------------------------
+
+ENG_BASE <- "englishness"
+
+# Build Englishness long panels, rename identity, CLEAN invalid codes, join eq income
+panel_eng_eq_noage <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = NULL
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+panel_eng_eq_age <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = INCOME_BASE,
+  age_base    = AGE_BASE
+) %>%
+  dplyr::rename(engl = brit) %>%
+  dplyr::mutate(engl = dplyr::if_else(engl %in% 1:7, engl, NA_real_)) %>%
+  dplyr::left_join(eq_long, by = c("id", "wave"))
+
+# Fail fast: must be 1–7 only (or NA)
+stopifnot(all(is.na(panel_eng_eq_noage$engl) | panel_eng_eq_noage$engl %in% 1:7))
+stopifnot(all(is.na(panel_eng_eq_age$engl)   | panel_eng_eq_age$engl   %in% 1:7))
+
+# Create analysis samples for both equivalence-weight variants
+panel_eng_eq03_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+panel_eng_eq03_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child03))
+
+panel_eng_eq05_noage <- panel_eng_eq_noage %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+panel_eng_eq05_age   <- panel_eng_eq_age   %>% dplyr::filter(!is.na(engl), !is.na(income_eq_child05))
+
+if(nrow(panel_eng_eq03_noage) == 0 || nrow(panel_eng_eq03_age) == 0){
+  stop("No non-missing Englishness + income_eq_child03 observations after merge/cleaning.")
+}
+if(nrow(panel_eng_eq05_noage) == 0 || nrow(panel_eng_eq05_age) == 0){
+  stop("No non-missing Englishness + income_eq_child05 observations after merge/cleaning.")
+}
+
+# -----------------------------
+# Models: child weight = 0.3
+# -----------------------------
+m_eng_eq03_0.1 <- feols(
+  dv ~ income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_1 <- feols(
+  dv ~ engl + income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_0.2 <- feols(
+  dv ~ income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+m_eng_eq03_2 <- feols(
+  dv ~ engl + income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+m_eng_eq03_3 <- feols(
+  dv ~ engl * income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_4 <- feols(
+  dv ~ engl * income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# -----------------------------
+# Models: child weight = 0.5
+# -----------------------------
+m_eng_eq05_0.1 <- feols(
+  dv ~ income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_1 <- feols(
+  dv ~ engl + income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_0.2 <- feols(
+  dv ~ income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+m_eng_eq05_2 <- feols(
+  dv ~ engl + income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+m_eng_eq05_3 <- feols(
+  dv ~ engl * income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_4 <- feols(
+  dv ~ engl * income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# Output
+summary(m_eng_eq03_0.1); summary(m_eng_eq03_1); summary(m_eng_eq03_0.2); summary(m_eng_eq03_2); summary(m_eng_eq03_3); summary(m_eng_eq03_4) 
+summary(m_eng_eq05_0.1); summary(m_eng_eq05_1); summary(m_eng_eq05_0.2); summary(m_eng_eq05_2); summary(m_eng_eq05_3); summary(m_eng_eq05_4)
+
+
+```
+
+```{r englishness_risk_models, echo=FALSE, message=FALSE, warning=FALSE}
+
+# ============================================================
+# Perceived unemployment risk — Englishness robustness
+# (CLEAN version: Englishness + risk properly recoded)
+# ============================================================
+
+ENG_BASE  <- "englishness"
+RISK_BASE <- "riskUnemployment"
+
+# --- Build long panels (no age / with age) ---
+panel_risk_noage_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = NULL
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+panel_risk_age_eng <- make_long_with_income(
+  df,
+  dv_base     = DV_BASE,
+  brit_base   = ENG_BASE,
+  time_base   = TIME_BASE,
+  income_base = RISK_BASE,
+  age_base    = AGE_BASE
+) %>% 
+  rename(
+    engl       = brit,
+    risk_unemp = income
+  ) %>%
+  mutate(
+    engl       = if_else(engl %in% 1:7, engl, NA_real_),
+    risk_unemp = if_else(risk_unemp >= 0 & risk_unemp <= 10, risk_unemp, NA_real_)
+  )
+
+# --- Fail fast sanity checks ---
+stopifnot(all(is.na(panel_risk_noage_eng$engl) | panel_risk_noage_eng$engl %in% 1:7))
+stopifnot(all(is.na(panel_risk_age_eng$engl)   | panel_risk_age_eng$engl   %in% 1:7))
+
+# --- Models: main effects ---
+m_risk_eng_0.1 <- feols(
+  dv ~ risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_1 <- feols(
+  dv ~ engl + risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_0.2 <- feols(
+  dv ~ risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+m_risk_eng_2 <- feols(
+  dv ~ engl + risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Models: moderation (interaction) ---
+m_risk_eng_3 <- feols(
+  dv ~ engl * risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_4 <- feols(
+  dv ~ engl * risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# --- Output ---
+summary(m_risk_eng_0.1)
+summary(m_risk_eng_1)
+summary(m_risk_eng_0.2)
+summary(m_risk_eng_2)
+summary(m_risk_eng_3)
+summary(m_risk_eng_4)
+
+```
+
+```{r englishness_risk_models_1, echo=FALSE, message=FALSE, warning=FALSE}
+# ==========================================================
+# Diagnostic: Does unemployment risk predict Britishness?
+# ==========================================================
+
+# (5) Britishness ~ risk (no age)
+m_engl_risk_noage_engl <- feols(
+  engl ~ risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+# (6) Britishness ~ risk + age
+m_engl_risk_engl <- feols(
+  engl ~ risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+summary(m_engl_risk_noage_engl)
+summary(m_engl_risk_engl)
+
+```
+
+```{r englishness_categorical_micro, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# MICRO robustness: Englishness as categorical (ref = 7)
+# ============================================================
+
+# 0) Ensure Englishness is valid (1–7) and create factor with ref = 7
+panel_self_eng <- panel_self_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_num = if_else(engl_num %in% 1:7, engl_num, NA_real_),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+# (Optional but recommended) Add engl_cat to the income/risk panels too
+# so the interacted specifications run on the exact same samples.
+panel_eng_eq03_noage <- panel_eng_eq03_noage %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq03_age <- panel_eng_eq03_age %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_noage <- panel_eng_eq05_noage %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_eng_eq05_age <- panel_eng_eq05_age %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_noage_eng <- panel_risk_noage_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+panel_risk_age_eng <- panel_risk_age_eng %>%
+  mutate(
+    engl_num = as.numeric(engl),
+    engl_cat = relevel(factor(engl_num, levels = 1:7), ref = "7")
+  ) %>%
+  filter(!is.na(engl_num))
+
+# ============================================================
+# A) Base models (categorical Englishness; 7 = reference)
+# ============================================================
+
+m1_eng_cat <- feols(
+  dv ~ i(engl_num, ref = 7) | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+m2_eng_cat <- feols(
+  dv ~ i(engl_num, ref = 7) + age | id + wave,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# Flexible wave-specific categorical differences (relative to engl = 7)
+m_wave_eng_cat <- feols(
+  dv ~ i(wave, engl_num, ref = 7) | id,
+  data = panel_self_eng,
+  cluster = "id"
+)
+
+# ============================================================
+# B) Equivalised income robustness (categorical Englishness)
+#     - child weight = 0.3 (eq03)
+#     - child weight = 0.5 (eq05)
+# ============================================================
+
+# --- eq03 main effects ---
+m_eng_eq03_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# --- eq03 moderation ---
+m_eng_eq03_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child03 | id + wave,
+  data = panel_eng_eq03_noage,
+  cluster = "id"
+)
+
+m_eng_eq03_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child03 + age | id + wave,
+  data = panel_eng_eq03_age,
+  cluster = "id"
+)
+
+# --- eq05 main effects ---
+m_eng_eq05_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# --- eq05 moderation ---
+m_eng_eq05_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child05 | id + wave,
+  data = panel_eng_eq05_noage,
+  cluster = "id"
+)
+
+m_eng_eq05_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * income_eq_child05 + age | id + wave,
+  data = panel_eng_eq05_age,
+  cluster = "id"
+)
+
+# ============================================================
+# C) Unemployment-risk robustness (categorical Englishness)
+# ============================================================
+
+# Risk main effects
+m_risk_eng_cat_1 <- feols(
+  dv ~ i(engl_num, ref = 7) + risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_cat_2 <- feols(
+  dv ~ i(engl_num, ref = 7) + risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# Risk moderation
+m_risk_eng_cat_3 <- feols(
+  dv ~ i(engl_num, ref = 7) * risk_unemp | id + wave,
+  data = panel_risk_noage_eng,
+  cluster = "id"
+)
+
+m_risk_eng_cat_4 <- feols(
+  dv ~ i(engl_num, ref = 7) * risk_unemp + age | id + wave,
+  data = panel_risk_age_eng,
+  cluster = "id"
+)
+
+# ============================================================
+# (Optional) Quick checks in render log
+# ============================================================
+# m1_eng_cat
+# m2_eng_cat
+# summary(m_wave_eng_cat)
+
+```
+
+```{r englishness_categorical_micro_results, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# DISPLAY: Englishness categorical MICRO results (mirror brit)
+# Assumes the models were estimated in the previous chunk.
+# ============================================================
+
+# Base models
+m1_eng_cat
+m2_eng_cat
+m_wave_eng_cat
+
+# Optional: plot wave-specific categorical differences (relative to engl = 7)
+iplot(
+  m_wave_eng_cat,
+  xlab = "Wave",
+  main = "Wave-specific difference relative to Englishness = 7"
+)
+
+# Equivalised income (child weight = 0.3)
+summary(m_eng_eq03_cat_1)
+summary(m_eng_eq03_cat_2)
+summary(m_eng_eq03_cat_3)
+summary(m_eng_eq03_cat_4)
+
+# Equivalised income (child weight = 0.5)
+summary(m_eng_eq05_cat_1)
+summary(m_eng_eq05_cat_2)
+summary(m_eng_eq05_cat_3)
+summary(m_eng_eq05_cat_4)
+
+# Unemployment risk
+summary(m_risk_eng_cat_1)
+summary(m_risk_eng_cat_2)
+summary(m_risk_eng_cat_3)
+summary(m_risk_eng_cat_4)
+
+```
+
+```{r save_micro_models, echo=FALSE, message=FALSE, warning=FALSE}
+# ============================================================
+# Save MICRO models with "_micro" suffix (to avoid name clashes
+# with meso/macro objects)
+# UPDATED: adds Englishness categorical models
+# ============================================================
+
+# 1) Define the micro model object names
+micro_model_names <- c(
+
+  # --- Base models (Britishness continuous) ---
+  "m1", "m2", "m_wave",
+
+  # --- Income (raw income) ---
+  "m_inc_0.1", "m_inc_1", "m_inc_0.2", "m_inc_2", "m_inc_3", "m_inc_4",
+
+  # --- Equivalised income (child weight = 0.3) ---
+  "m_eq03_0.1", "m_eq03_1", "m_eq03_0.2", "m_eq03_2", "m_eq03_3", "m_eq03_4",
+
+  # --- Equivalised income (child weight = 0.5) ---
+  "m_eq05_0.1", "m_eq05_1", "m_eq05_0.2", "m_eq05_2", "m_eq05_3", "m_eq05_4",
+
+  # --- Risk of unemployment (Britishness) ---
+  "m_risk_0.1", "m_risk_1", "m_risk_0.2", "m_risk_2", "m_risk_3", "m_risk_4",
+
+  # --- Diagnostic: Britishness ~ risk ---
+  "m_brit_risk_noage", "m_brit_risk",
+
+  # --- Robustness: Britishness categorical ---
+  "m1_cat", "m2_cat", "m_wave_cat",
+
+  # --- Robustness: categorical Britishness × income (raw + eq income) ---
+  "m_inc_cat_1", "m_inc_cat_2", "m_inc_cat_3", "m_inc_cat_4",
+  "m_eq03_cat_1", "m_eq03_cat_2", "m_eq03_cat_3", "m_eq03_cat_4",
+  "m_eq05_cat_1", "m_eq05_cat_2", "m_eq05_cat_3", "m_eq05_cat_4",
+
+  # --- Robustness: categorical Britishness × risk ---
+  "m_risk_cat_1", "m_risk_cat_2", "m_risk_cat_3", "m_risk_cat_4",
+
+  # --- Englishness (continuous) base + flexible wave ---
+  "m1_eng", "m2_eng", "m_wave_eng",
+
+  # --- Englishness × equivalised income (0.3) ---
+  "m_eng_eq03_0.1", "m_eng_eq03_1", "m_eng_eq03_0.2",
+  "m_eng_eq03_2", "m_eng_eq03_3", "m_eng_eq03_4",
+
+  # --- Englishness × equivalised income (0.5) ---
+  "m_eng_eq05_0.1", "m_eng_eq05_1", "m_eng_eq05_0.2",
+  "m_eng_eq05_2", "m_eng_eq05_3", "m_eng_eq05_4",
+
+  # --- Englishness × risk ---
+  "m_risk_eng_0.1", "m_risk_eng_1", "m_risk_eng_0.2",
+  "m_risk_eng_2", "m_risk_eng_3", "m_risk_eng_4",
+
+  # --- Diagnostic: Englishness ~ risk ---
+  "m_engl_risk_noage_engl", "m_engl_risk_engl",
+
+  # ==========================================================
+  # NEW: Englishness categorical (base + interactions)
+  # ==========================================================
+  "m1_eng_cat", "m2_eng_cat", "m_wave_eng_cat",
+
+  "m_eng_eq03_cat_1", "m_eng_eq03_cat_2", "m_eng_eq03_cat_3", "m_eng_eq03_cat_4",
+  "m_eng_eq05_cat_1", "m_eng_eq05_cat_2", "m_eng_eq05_cat_3", "m_eng_eq05_cat_4",
+
+  "m_risk_eng_cat_1", "m_risk_eng_cat_2", "m_risk_eng_cat_3", "m_risk_eng_cat_4"
+)
+
+# 2) Fail-fast: ensure every model exists in the environment
+missing_models <- micro_model_names[!vapply(micro_model_names, exists, logical(1), inherits = TRUE)]
+if(length(missing_models) > 0){
+  stop(
+    "These MICRO model objects were NOT found in the environment:\n- ",
+    paste(missing_models, collapse = "\n- "),
+    "\n\nMake sure the chunks that estimate them were run before saving."
+  )
+}
+
+# 3) Helper: pull objects + suffix names
+suffix_models <- function(obj_names, suffix = "_micro"){
+  objs <- mget(obj_names, inherits = TRUE)
+  names(objs) <- paste0(obj_names, suffix)
+  objs
+}
+
+# 4) Build "ALL micro models" list (every model gets _micro)
+models_micro_all <- suffix_models(micro_model_names, "_micro_Cultural")
+
+# 5) Optional: thematic sub-lists (also suffixed)
+models_micro_base <- suffix_models(c("m1","m2","m_wave"), "_micro")
+
+models_micro_income_raw <- suffix_models(
+  c("m_inc_0.1","m_inc_1","m_inc_0.2","m_inc_2","m_inc_3","m_inc_4"),
+  "_micro_Cultural"
+)
+
+models_micro_income_eq03 <- suffix_models(
+  c("m_eq03_0.1","m_eq03_1","m_eq03_0.2","m_eq03_2","m_eq03_3","m_eq03_4"),
+  "_micro_Cultural"
+)
+
+models_micro_income_eq05 <- suffix_models(
+  c("m_eq05_0.1","m_eq05_1","m_eq05_0.2","m_eq05_2","m_eq05_3","m_eq05_4"),
+  "_micro_Cultural"
+)
+
+models_micro_risk <- suffix_models(
+  c("m_risk_0.1","m_risk_1","m_risk_0.2","m_risk_2","m_risk_3","m_risk_4"),
+  "_micro_Cultural"
+)
+
+models_micro_diag <- suffix_models(
+  c("m_brit_risk_noage","m_brit_risk","m_engl_risk_noage_engl","m_engl_risk_engl"),
+  "_micro_Cultural"
+)
+
+models_micro_cat_base <- suffix_models(c("m1_cat","m2_cat","m_wave_cat"), "_micro_Cultural")
+
+models_micro_cat_income <- suffix_models(
+  c("m_inc_cat_1","m_inc_cat_2","m_inc_cat_3","m_inc_cat_4",
+    "m_eq03_cat_1","m_eq03_cat_2","m_eq03_cat_3","m_eq03_cat_4",
+    "m_eq05_cat_1","m_eq05_cat_2","m_eq05_cat_3","m_eq05_cat_4"),
+  "_micro_Cultural"
+)
+
+models_micro_cat_risk <- suffix_models(
+  c("m_risk_cat_1","m_risk_cat_2","m_risk_cat_3","m_risk_cat_4"),
+  "_micro_Cultural"
+)
+
+models_micro_english_base <- suffix_models(c("m1_eng","m2_eng","m_wave_eng"), "_micro_Cultural")
+
+models_micro_english_eq03 <- suffix_models(
+  c("m_eng_eq03_0.1","m_eng_eq03_1","m_eng_eq03_0.2","m_eng_eq03_2","m_eng_eq03_3","m_eng_eq03_4"),
+  "_micro_Cultural"
+)
+
+models_micro_english_eq05 <- suffix_models(
+  c("m_eng_eq05_0.1","m_eng_eq05_1","m_eng_eq05_0.2","m_eng_eq05_2","m_eng_eq05_3","m_eng_eq05_4"),
+  "_micro_Cultural"
+)
+
+models_micro_english_risk <- suffix_models(
+  c("m_risk_eng_0.1","m_risk_eng_1","m_risk_eng_0.2","m_risk_eng_2","m_risk_eng_3","m_risk_eng_4"),
+  "_micro_Cultural"
+)
+
+# NEW: Englishness categorical thematic lists
+models_micro_english_cat_base <- suffix_models(
+  c("m1_eng_cat","m2_eng_cat","m_wave_eng_cat"),
+  "_micro_Cultural"
+)
+
+models_micro_english_cat_eq03 <- suffix_models(
+  c("m_eng_eq03_cat_1","m_eng_eq03_cat_2","m_eng_eq03_cat_3","m_eng_eq03_cat_4"),
+  "_micro_Cultural"
+)
+
+models_micro_english_cat_eq05 <- suffix_models(
+  c("m_eng_eq05_cat_1","m_eng_eq05_cat_2","m_eng_eq05_cat_3","m_eng_eq05_cat_4"),
+  "_micro_Cultural"
+)
+
+models_micro_english_cat_risk <- suffix_models(
+  c("m_risk_eng_cat_1","m_risk_eng_cat_2","m_risk_eng_cat_3","m_risk_eng_cat_4"),
+  "_micro_Cultural"
+)
+
+# 6) Save
+out_dir <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/models_micro_Cultural"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+saveRDS(models_micro_all,                file.path(out_dir, "models_micro_all.rds"))
+saveRDS(models_micro_base,               file.path(out_dir, "models_micro_base.rds"))
+saveRDS(models_micro_income_raw,         file.path(out_dir, "models_micro_income_raw.rds"))
+saveRDS(models_micro_income_eq03,        file.path(out_dir, "models_micro_income_eq03.rds"))
+saveRDS(models_micro_income_eq05,        file.path(out_dir, "models_micro_income_eq05.rds"))
+saveRDS(models_micro_risk,               file.path(out_dir, "models_micro_risk.rds"))
+saveRDS(models_micro_diag,               file.path(out_dir, "models_micro_diagnostics.rds"))
+saveRDS(models_micro_cat_base,           file.path(out_dir, "models_micro_cat_base.rds"))
+saveRDS(models_micro_cat_income,         file.path(out_dir, "models_micro_cat_income.rds"))
+saveRDS(models_micro_cat_risk,           file.path(out_dir, "models_micro_cat_risk.rds"))
+saveRDS(models_micro_english_base,       file.path(out_dir, "models_micro_english_base.rds"))
+saveRDS(models_micro_english_eq03,       file.path(out_dir, "models_micro_english_eq03.rds"))
+saveRDS(models_micro_english_eq05,       file.path(out_dir, "models_micro_english_eq05.rds"))
+saveRDS(models_micro_english_risk,       file.path(out_dir, "models_micro_english_risk.rds"))
+
+# NEW: save Englishness categorical bundles
+saveRDS(models_micro_english_cat_base,   file.path(out_dir, "models_micro_english_cat_base.rds"))
+saveRDS(models_micro_english_cat_eq03,   file.path(out_dir, "models_micro_english_cat_eq03.rds"))
+saveRDS(models_micro_english_cat_eq05,   file.path(out_dir, "models_micro_english_cat_eq05.rds"))
+saveRDS(models_micro_english_cat_risk,   file.path(out_dir, "models_micro_english_cat_risk.rds"))
+
+cat("Saved MICRO models to:", out_dir, "\n")
+cat("Total models saved:", length(models_micro_all), "\n")
+```
+

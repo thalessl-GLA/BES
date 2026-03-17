@@ -1,0 +1,697 @@
+---
+title: "Online Appendix C.7: Macro-Level Models — Mundlak Correlated Random Effects"
+subtitle: "Within/Between Decomposition for National Economic Context (Britishness and Englishness)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(haven)
+library(purrr)
+library(lme4)
+library(lmerTest)
+library(modelsummary)
+library(kableExtra)
+
+options(modelsummary_factory_default = "kableExtra")
+
+GOF_MAP <- tribble(
+  ~raw,   ~clean,         ~fmt,
+  "nobs", "Observations", 0,
+  "AIC",  "AIC",          1,
+  "BIC",  "BIC",          1
+)
+
+OMIT_WAVE <- "factor\\(wave\\)|poly\\(wave"
+
+ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+df <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds"
+)
+
+DV_BASE          <- "immigSelf"
+BRIT_BASE        <- "britishness"
+ENG_BASE         <- "englishness"
+TIME_BASE        <- "starttime"
+AGE_BASE         <- "age"
+MACRO_GDP_BASE   <- "gdp_pc"
+MACRO_UNEMP_BASE <- "unempl_rate"
+MACRO_CLAIM_BASE <- "claimant_k"
+MACRO_CPIH_BASE  <- "cpih_rate"
+
+DV_VALID_RANGE    <- 1:10
+IDENT_VALID_RANGE <- 1:7
+
+MACRO_VARS <- c(
+  gdp_pc      = MACRO_GDP_BASE,
+  unempl_rate = MACRO_UNEMP_BASE,
+  claimant_k  = MACRO_CLAIM_BASE,
+  cpih_rate   = MACRO_CPIH_BASE
+)
+
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+identity_label <- function(identity_base) {
+  switch(identity_base, britishness = "brit", englishness = "engl", identity_base)
+}
+
+# ── Macro pivot helper ────────────────────────────────────────────────────────
+pivot_macro <- function(df, base, waves_keep) {
+  cols <- paste0(base, "W", waves_keep)
+  cols <- cols[cols %in% names(df)]
+  if (length(cols) == 0) return(NULL)
+  df |>
+    select(id, all_of(cols)) |>
+    mutate(across(all_of(cols), ~ as.numeric(zap_labels(.x)))) |>
+    pivot_longer(cols = -id, names_to = "wave",
+                 names_pattern = paste0("^", base, "W(\\d+)$"),
+                 values_to = base) |>
+    mutate(wave = as.integer(wave))
+}
+
+# ── Panel builder ─────────────────────────────────────────────────────────────
+make_macro_panel <- function(df, dv_base, identity_base, time_base,
+                              age_base = AGE_BASE) {
+  w_dv    <- waves_available(df, dv_base)
+  w_ident <- waves_available(df, identity_base)
+  w_time  <- waves_available(df, time_base)
+  w_age   <- waves_available(df, age_base)
+  w_gdp   <- waves_available(df, MACRO_GDP_BASE)
+  w_unemp <- waves_available(df, MACRO_UNEMP_BASE)
+  w_claim <- waves_available(df, MACRO_CLAIM_BASE)
+  w_cpih  <- waves_available(df, MACRO_CPIH_BASE)
+
+  waves <- Reduce(intersect,
+                  list(w_dv, w_ident, w_time, w_age, w_gdp, w_unemp, w_claim, w_cpih))
+  if (length(waves) < 3)
+    stop(paste0("Too few overlapping waves for identity=", identity_base))
+
+  ident_lbl <- identity_label(identity_base)
+
+  indiv_cols <- c(
+    paste0(dv_base,       "W", waves),
+    paste0(identity_base, "W", waves),
+    paste0(time_base,     "W", waves),
+    paste0(age_base,      "W", waves)
+  )
+
+  panel <- df |>
+    mutate(across(all_of(indiv_cols), ~ as.numeric(zap_labels(.x)))) |>
+    select(id, all_of(indiv_cols)) |>
+    pivot_longer(cols = -id, names_to = c(".value", "wave"),
+                 names_pattern = "(.+)W(\\d+)$") |>
+    rename(dv = all_of(dv_base), ident = all_of(identity_base),
+           age = all_of(age_base), startime = all_of(time_base)) |>
+    mutate(
+      id   = as.character(id),
+      wave = as.integer(wave),
+      starttime_parsed = coalesce(
+        suppressWarnings(ymd_hms(as.character(startime), quiet = TRUE)),
+        suppressWarnings(ymd(as.character(startime),     quiet = TRUE))
+      ),
+      year  = year(starttime_parsed),
+      ident = if_else(ident %in% IDENT_VALID_RANGE, ident, NA_real_)
+    ) |>
+    filter(dv %in% DV_VALID_RANGE, !is.na(ident), !is.na(wave)) |>
+    rename(!!ident_lbl := ident)
+
+  for (base in MACRO_VARS) {
+    macro_tbl <- pivot_macro(df, base, waves)
+    if (!is.null(macro_tbl))
+      panel <- left_join(panel, macro_tbl, by = c("id", "wave"))
+  }
+  panel
+}
+
+# ── Mundlak decomposition ─────────────────────────────────────────────────────
+# Only identity (and age when included) is decomposed.
+# Macro indicators are wave-constant — decomposing them is vacuous.
+add_mundlak_terms <- function(data, vars, id_var = "id") {
+  out <- data |>
+    group_by(.data[[id_var]]) |>
+    mutate(across(all_of(vars), ~ mean(.x, na.rm = TRUE), .names = "{.col}_mean")) |>
+    ungroup()
+  for (v in vars) out[[paste0(v, "_w")]] <- out[[v]] - out[[paste0(v, "_mean")]]
+  out
+}
+
+# ── Model fitters ─────────────────────────────────────────────────────────────
+
+# Direct macro effect only (no identity); poly(wave,3) because macro is
+# collinear with factor(wave) in main-effects-only specifications.
+fit_main0 <- function(data, macro_var, include_age = FALSE) {
+  age_terms <- if (include_age) "+ age" else ""
+  fml <- as.formula(paste0("dv ~ ", macro_var, age_terms,
+                            " + poly(wave, 3, raw = TRUE) + (1 | id)"))
+  lmer(fml, data = data, REML = TRUE, control = ctrl)
+}
+
+# Continuous identity × macro interaction.
+# identity_w (within deviation) is the Mundlak-corrected identity term.
+# identity_mean is the Mundlak correction. macro_var enters at its level.
+# factor(wave) as fixed dummies (macro × identity_w is identified because
+# identity_w has individual-level variation even when macro is wave-constant).
+fit_mundlak_macro <- function(data, identity_var, macro_var, include_age = FALSE) {
+  mundlak_vars <- c(identity_var, if (include_age) "age")
+  d <- add_mundlak_terms(data, vars = mundlak_vars, id_var = "id")
+  age_terms <- if (include_age) "+ age_w + age_mean" else ""
+  fml <- as.formula(paste0(
+    "dv ~ ", identity_var, "_w * ", macro_var, " + ",
+    identity_var, "_mean + ", age_terms,
+    " + factor(wave) + (1 | id)"
+  ))
+  lmer(fml, data = d, REML = TRUE, control = ctrl)
+}
+
+# Categorical identity × macro interaction (ref = 7).
+fit_mundlak_macro_cat <- function(data, identity_var, macro_var, include_age = FALSE) {
+  cat_col <- paste0(identity_var, "_cat")
+  d <- data
+  d[[cat_col]] <- relevel(factor(d[[identity_var]], levels = 1:7), ref = "7")
+  age_terms <- if (include_age) "+ age" else ""
+  fml <- as.formula(paste0(
+    "dv ~ ", cat_col, " * ", macro_var, " + ", age_terms,
+    " + factor(wave) + (1 | id)"
+  ))
+  lmer(fml, data = d, REML = TRUE, control = ctrl)
+}
+
+# Auxiliary: identity ~ macro. Tests whether macro conditions predict
+# within-person identity change. poly(wave,3) used because macro collinear
+# with wave dummies.
+fit_identity_rob <- function(data, identity_var, macro_var) {
+  fml <- as.formula(paste0(
+    identity_var, " ~ ", macro_var,
+    " + poly(wave, 3, raw = TRUE) + (1 | id)"
+  ))
+  lmer(fml, data = data, REML = TRUE, control = ctrl)
+}
+```
+
+```{r build-panels, include=FALSE}
+panel_brit <- make_macro_panel(df, DV_BASE, BRIT_BASE, TIME_BASE)
+panel_engl <- make_macro_panel(df, DV_BASE, ENG_BASE,  TIME_BASE) |>
+  mutate(engl = if_else(engl == 9999, NA_real_, engl)) |>
+  filter(!is.na(engl))
+```
+
+```{r estimate-brit, include=FALSE}
+# ── Britishness continuous + categorical ── ────────────────────────────────────
+m_brit_gdp_noage     <- fit_mundlak_macro(panel_brit, "brit", "gdp_pc",      FALSE)
+m_brit_gdp_age       <- fit_mundlak_macro(panel_brit, "brit", "gdp_pc",      TRUE)
+m_brit_unemp_noage   <- fit_mundlak_macro(panel_brit, "brit", "unempl_rate", FALSE)
+m_brit_unemp_age     <- fit_mundlak_macro(panel_brit, "brit", "unempl_rate", TRUE)
+m_brit_claim_noage   <- fit_mundlak_macro(panel_brit, "brit", "claimant_k",  FALSE)
+m_brit_claim_age     <- fit_mundlak_macro(panel_brit, "brit", "claimant_k",  TRUE)
+m_brit_cpih_noage    <- fit_mundlak_macro(panel_brit, "brit", "cpih_rate",   FALSE)
+m_brit_cpih_age      <- fit_mundlak_macro(panel_brit, "brit", "cpih_rate",   TRUE)
+
+m_brit_cat_gdp_noage   <- fit_mundlak_macro_cat(panel_brit, "brit", "gdp_pc",      FALSE)
+m_brit_cat_gdp_age     <- fit_mundlak_macro_cat(panel_brit, "brit", "gdp_pc",      TRUE)
+m_brit_cat_unemp_noage <- fit_mundlak_macro_cat(panel_brit, "brit", "unempl_rate", FALSE)
+m_brit_cat_unemp_age   <- fit_mundlak_macro_cat(panel_brit, "brit", "unempl_rate", TRUE)
+m_brit_cat_claim_noage <- fit_mundlak_macro_cat(panel_brit, "brit", "claimant_k",  FALSE)
+m_brit_cat_claim_age   <- fit_mundlak_macro_cat(panel_brit, "brit", "claimant_k",  TRUE)
+m_brit_cat_cpih_noage  <- fit_mundlak_macro_cat(panel_brit, "brit", "cpih_rate",   FALSE)
+m_brit_cat_cpih_age    <- fit_mundlak_macro_cat(panel_brit, "brit", "cpih_rate",   TRUE)
+
+# ── Britishness direct-effect (main0) models ──────────────────────────────────
+m_main0_gdp_noage   <- fit_main0(panel_brit, "gdp_pc",      FALSE)
+m_main0_gdp_age     <- fit_main0(panel_brit, "gdp_pc",      TRUE)
+m_main0_unemp_noage <- fit_main0(panel_brit, "unempl_rate", FALSE)
+m_main0_unemp_age   <- fit_main0(panel_brit, "unempl_rate", TRUE)
+m_main0_claim_noage <- fit_main0(panel_brit, "claimant_k",  FALSE)
+m_main0_claim_age   <- fit_main0(panel_brit, "claimant_k",  TRUE)
+m_main0_cpih_noage  <- fit_main0(panel_brit, "cpih_rate",   FALSE)
+m_main0_cpih_age    <- fit_main0(panel_brit, "cpih_rate",   TRUE)
+
+# ── Britishness auxiliary ─────────────────────────────────────────────────────
+m_brit_rob_gdp   <- fit_identity_rob(panel_brit, "brit", "gdp_pc")
+m_brit_rob_unemp <- fit_identity_rob(panel_brit, "brit", "unempl_rate")
+m_brit_rob_claim <- fit_identity_rob(panel_brit, "brit", "claimant_k")
+m_brit_rob_cpih  <- fit_identity_rob(panel_brit, "brit", "cpih_rate")
+
+# ── Decomposition validity check ──────────────────────────────────────────────
+tmp <- add_mundlak_terms(panel_brit, vars = "brit")
+stopifnot(max(abs(tmp$brit - (tmp$brit_mean + tmp$brit_w)), na.rm = TRUE) < 1e-8)
+rm(tmp)
+```
+
+```{r estimate-engl, include=FALSE}
+m_engl_gdp_noage     <- fit_mundlak_macro(panel_engl, "engl", "gdp_pc",      FALSE)
+m_engl_gdp_age       <- fit_mundlak_macro(panel_engl, "engl", "gdp_pc",      TRUE)
+m_engl_unemp_noage   <- fit_mundlak_macro(panel_engl, "engl", "unempl_rate", FALSE)
+m_engl_unemp_age     <- fit_mundlak_macro(panel_engl, "engl", "unempl_rate", TRUE)
+m_engl_claim_noage   <- fit_mundlak_macro(panel_engl, "engl", "claimant_k",  FALSE)
+m_engl_claim_age     <- fit_mundlak_macro(panel_engl, "engl", "claimant_k",  TRUE)
+m_engl_cpih_noage    <- fit_mundlak_macro(panel_engl, "engl", "cpih_rate",   FALSE)
+m_engl_cpih_age      <- fit_mundlak_macro(panel_engl, "engl", "cpih_rate",   TRUE)
+
+m_engl_cat_gdp_noage   <- fit_mundlak_macro_cat(panel_engl, "engl", "gdp_pc",      FALSE)
+m_engl_cat_gdp_age     <- fit_mundlak_macro_cat(panel_engl, "engl", "gdp_pc",      TRUE)
+m_engl_cat_unemp_noage <- fit_mundlak_macro_cat(panel_engl, "engl", "unempl_rate", FALSE)
+m_engl_cat_unemp_age   <- fit_mundlak_macro_cat(panel_engl, "engl", "unempl_rate", TRUE)
+m_engl_cat_claim_noage <- fit_mundlak_macro_cat(panel_engl, "engl", "claimant_k",  FALSE)
+m_engl_cat_claim_age   <- fit_mundlak_macro_cat(panel_engl, "engl", "claimant_k",  TRUE)
+m_engl_cat_cpih_noage  <- fit_mundlak_macro_cat(panel_engl, "engl", "cpih_rate",   FALSE)
+m_engl_cat_cpih_age    <- fit_mundlak_macro_cat(panel_engl, "engl", "cpih_rate",   TRUE)
+
+m_engl_rob_gdp   <- fit_identity_rob(panel_engl, "engl", "gdp_pc")
+m_engl_rob_unemp <- fit_identity_rob(panel_engl, "engl", "unempl_rate")
+m_engl_rob_claim <- fit_identity_rob(panel_engl, "engl", "claimant_k")
+m_engl_rob_cpih  <- fit_identity_rob(panel_engl, "engl", "cpih_rate")
+
+tmp <- add_mundlak_terms(panel_engl, vars = "engl")
+stopifnot(max(abs(tmp$engl - (tmp$engl_mean + tmp$engl_w)), na.rm = TRUE) < 1e-8)
+rm(tmp)
+```
+
+---
+
+All models in this appendix use the Mundlak correlated random-effects (CRE) specification at the macro level. The macro context introduces a structural difference from the micro (Appendix A.7) and meso (Appendix B.7) Mundlak appendices: **macro indicators are wave-constant**, taking a single value per survey wave shared identically across all individuals. Decomposing a wave-constant variable into person-mean and within-deviation would be vacuous — the "within deviation" would have no individual-level variation. Consequently:
+
+- **Identity** (Britishness or Englishness) is Mundlak-decomposed as usual into `identity_mean` (between-person average) and `identity_w` (within-person deviation). The Mundlak correction `identity_mean` controls for stable between-person differences in national identification.
+- **Macro indicators** are entered at their level (not decomposed). The `identity_w × macro` interaction is still identified because `identity_w` carries individual-level variation even when the macro variable is wave-constant.
+- **Wave effects** are entered as fixed dummies `factor(wave)` in all interaction models, consistent with the identification strategy throughout. In the direct macro-only models (`main0`), `factor(wave)` would be collinear with the macro indicator itself, so a cubic wave polynomial `poly(wave, 3)` is used instead — exactly as in the FE and RE macro appendices.
+
+The key quantity in each interaction table is `identity_w × macro`: it estimates whether the within-individual slope of national identification on immigration preferences varies with the level of the national macroeconomic indicator, net of between-person differences in identification captured by `identity_mean`. Wave dummy and polynomial coefficients are suppressed from all tables for readability.
+
+---
+
+# C.7.1 Britishness (Continuous) {#sec-c7-brit}
+
+## C.7.1.1 Direct Macro Effects (No Identity) {#sec-c7-brit-main0}
+
+The direct-effect models test whether macro conditions are associated with immigration attitudes independently of national identification, using a cubic wave polynomial to absorb the wave trend without collinearity.
+
+```{r tbl-brit-main0}
+modelsummary(
+  list(
+    "GDP (no age)"     = m_main0_gdp_noage,
+    "GDP (age)"        = m_main0_gdp_age,
+    "Unemp. (no age)"  = m_main0_unemp_noage,
+    "Unemp. (age)"     = m_main0_unemp_age,
+    "Claim. (no age)"  = m_main0_claim_noage,
+    "Claim. (age)"     = m_main0_claim_age,
+    "CPIH (no age)"    = m_main0_cpih_noage,
+    "CPIH (age)"       = m_main0_cpih_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(gdp_pc = "GDP per capita", unempl_rate = "Nat. unemp. rate",
+                  claimant_k = "Claimant count", cpih_rate = "CPIH inflation",
+                  age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.1. Direct Macro Effects on Immigration Attitudes: Mundlak CRE (No Identity)",
+  notes   = "REML. Random intercept for respondent. Cubic wave polynomial suppressed. DV: immigSelf.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.1.2 GDP per Capita × Britishness {#sec-c7-brit-gdp}
+
+```{r tbl-brit-gdp}
+modelsummary(
+  list(
+    "(1) No age" = m_brit_gdp_noage,
+    "(2) Age"    = m_brit_gdp_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w             = "Britishness (within)",
+    brit_mean          = "Britishness (mean)",
+    gdp_pc             = "GDP per capita",
+    "brit_w:gdp_pc"    = "Britishness (within) × GDP",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.2. GDP per Capita × Britishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness (within) × GDP.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.1.3 National Unemployment Rate × Britishness {#sec-c7-brit-unemp}
+
+```{r tbl-brit-unemp}
+modelsummary(
+  list(
+    "(1) No age" = m_brit_unemp_noage,
+    "(2) Age"    = m_brit_unemp_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w                 = "Britishness (within)",
+    brit_mean              = "Britishness (mean)",
+    unempl_rate            = "Nat. unemp. rate",
+    "brit_w:unempl_rate"   = "Britishness (within) × Unemp. rate",
+    age_w                  = "Age (within)",
+    age_mean               = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.3. National Unemployment Rate × Britishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness (within) × Unemp. rate.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.1.4 National Claimant Count × Britishness {#sec-c7-brit-claim}
+
+```{r tbl-brit-claim}
+modelsummary(
+  list(
+    "(1) No age" = m_brit_claim_noage,
+    "(2) Age"    = m_brit_claim_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w               = "Britishness (within)",
+    brit_mean            = "Britishness (mean)",
+    claimant_k           = "Claimant count (nat.)",
+    "brit_w:claimant_k"  = "Britishness (within) × Claimant count",
+    age_w                = "Age (within)",
+    age_mean             = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.4. National Claimant Count × Britishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness (within) × Claimant count.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.1.5 CPIH Inflation × Britishness {#sec-c7-brit-cpih}
+
+```{r tbl-brit-cpih}
+modelsummary(
+  list(
+    "(1) No age" = m_brit_cpih_noage,
+    "(2) Age"    = m_brit_cpih_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    brit_w             = "Britishness (within)",
+    brit_mean          = "Britishness (mean)",
+    cpih_rate          = "CPIH inflation",
+    "brit_w:cpih_rate" = "Britishness (within) × CPIH",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.5. CPIH Inflation × Britishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Britishness (within) × CPIH.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# C.7.2 Britishness (Categorical) {#sec-c7-brit-cat}
+
+The categorical Britishness Mundlak models replace the continuous within-deviation with a factor variable (reference: 7, "very strongly British") interacted with the macro indicator at its level. The categorical factor levels absorb between-person identity differences directly, so only age is Mundlak-decomposed when age controls are included.
+
+## C.7.2.1 GDP per Capita × Britishness (Categorical) {#sec-c7-brit-cat-gdp}
+
+```{r tbl-brit-cat-gdp}
+modelsummary(
+  list("(1) No age" = m_brit_cat_gdp_noage, "(2) Age" = m_brit_cat_gdp_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.6. GDP per Capita × Britishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Britishness = 7. Key quantity: brit_cat × GDP.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.2.2 National Unemployment Rate × Britishness (Categorical) {#sec-c7-brit-cat-unemp}
+
+```{r tbl-brit-cat-unemp}
+modelsummary(
+  list("(1) No age" = m_brit_cat_unemp_noage, "(2) Age" = m_brit_cat_unemp_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.7. National Unemployment Rate × Britishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Britishness = 7. Key quantity: brit_cat × Unemp. rate.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.2.3 National Claimant Count × Britishness (Categorical) {#sec-c7-brit-cat-claim}
+
+```{r tbl-brit-cat-claim}
+modelsummary(
+  list("(1) No age" = m_brit_cat_claim_noage, "(2) Age" = m_brit_cat_claim_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.8. National Claimant Count × Britishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Britishness = 7. Key quantity: brit_cat × Claimant count.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.2.4 CPIH Inflation × Britishness (Categorical) {#sec-c7-brit-cat-cpih}
+
+```{r tbl-brit-cat-cpih}
+modelsummary(
+  list("(1) No age" = m_brit_cat_cpih_noage, "(2) Age" = m_brit_cat_cpih_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.9. CPIH Inflation × Britishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Britishness = 7. Key quantity: brit_cat × CPIH.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# C.7.3 Englishness (Continuous) {#sec-c7-engl}
+
+The Englishness Mundlak models replicate the Britishness structure with Englishness as the identity variable. The key quantity throughout is `engl_w × macro`: the within-individual Englishness slope varies with the macro indicator's level. Consistent with the FE and RE macro appendices, Englishness interactions tend to be larger in magnitude than the corresponding Britishness interactions, particularly for CPIH and claimant count.
+
+## C.7.3.1 GDP per Capita × Englishness {#sec-c7-engl-gdp}
+
+```{r tbl-engl-gdp}
+modelsummary(
+  list(
+    "(1) No age" = m_engl_gdp_noage,
+    "(2) Age"    = m_engl_gdp_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w             = "Englishness (within)",
+    engl_mean          = "Englishness (mean)",
+    gdp_pc             = "GDP per capita",
+    "engl_w:gdp_pc"    = "Englishness (within) × GDP",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.10. GDP per Capita × Englishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness (within) × GDP.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.3.2 National Unemployment Rate × Englishness {#sec-c7-engl-unemp}
+
+```{r tbl-engl-unemp}
+modelsummary(
+  list(
+    "(1) No age" = m_engl_unemp_noage,
+    "(2) Age"    = m_engl_unemp_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w                 = "Englishness (within)",
+    engl_mean              = "Englishness (mean)",
+    unempl_rate            = "Nat. unemp. rate",
+    "engl_w:unempl_rate"   = "Englishness (within) × Unemp. rate",
+    age_w                  = "Age (within)",
+    age_mean               = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.11. National Unemployment Rate × Englishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness (within) × Unemp. rate.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.3.3 National Claimant Count × Englishness {#sec-c7-engl-claim}
+
+```{r tbl-engl-claim}
+modelsummary(
+  list(
+    "(1) No age" = m_engl_claim_noage,
+    "(2) Age"    = m_engl_claim_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w               = "Englishness (within)",
+    engl_mean            = "Englishness (mean)",
+    claimant_k           = "Claimant count (nat.)",
+    "engl_w:claimant_k"  = "Englishness (within) × Claimant count",
+    age_w                = "Age (within)",
+    age_mean             = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.12. National Claimant Count × Englishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness (within) × Claimant count.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.3.4 CPIH Inflation × Englishness {#sec-c7-engl-cpih}
+
+```{r tbl-engl-cpih}
+modelsummary(
+  list(
+    "(1) No age" = m_engl_cpih_noage,
+    "(2) Age"    = m_engl_cpih_age
+  ),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(
+    engl_w             = "Englishness (within)",
+    engl_mean          = "Englishness (mean)",
+    cpih_rate          = "CPIH inflation",
+    "engl_w:cpih_rate" = "Englishness (within) × CPIH",
+    age_w              = "Age (within)",
+    age_mean           = "Age (mean)"
+  ),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.13. CPIH Inflation × Englishness: Mundlak CRE",
+  notes   = "REML. Wave dummies included but suppressed. Random intercept for respondent. Key quantity: Englishness (within) × CPIH.",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# C.7.4 Englishness (Categorical) {#sec-c7-engl-cat}
+
+As in Section C.7.2, Englishness is entered as a factor (reference: 7) interacted with the macro indicator at its level.
+
+## C.7.4.1 GDP per Capita × Englishness (Categorical) {#sec-c7-engl-cat-gdp}
+
+```{r tbl-engl-cat-gdp}
+modelsummary(
+  list("(1) No age" = m_engl_cat_gdp_noage, "(2) Age" = m_engl_cat_gdp_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.14. GDP per Capita × Englishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Englishness = 7. Key quantity: engl_cat × GDP.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.4.2 National Unemployment Rate × Englishness (Categorical) {#sec-c7-engl-cat-unemp}
+
+```{r tbl-engl-cat-unemp}
+modelsummary(
+  list("(1) No age" = m_engl_cat_unemp_noage, "(2) Age" = m_engl_cat_unemp_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.15. National Unemployment Rate × Englishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Englishness = 7. Key quantity: engl_cat × Unemp. rate.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.4.3 National Claimant Count × Englishness (Categorical) {#sec-c7-engl-cat-claim}
+
+```{r tbl-engl-cat-claim}
+modelsummary(
+  list("(1) No age" = m_engl_cat_claim_noage, "(2) Age" = m_engl_cat_claim_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.16. National Claimant Count × Englishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Englishness = 7. Key quantity: engl_cat × Claimant count.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+## C.7.4.4 CPIH Inflation × Englishness (Categorical) {#sec-c7-engl-cat-cpih}
+
+```{r tbl-engl-cat-cpih}
+modelsummary(
+  list("(1) No age" = m_engl_cat_cpih_noage, "(2) Age" = m_engl_cat_cpih_age),
+  coef_omit = OMIT_WAVE, gof_map = GOF_MAP,
+  stars = c("*" = .05, "**" = .01, "***" = .001),
+  title = "Table C7.17. CPIH Inflation × Englishness (Categorical): Mundlak CRE",
+  notes = "REML. Wave dummies suppressed. Reference: Englishness = 7. Key quantity: engl_cat × CPIH.",
+  escape = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+# C.7.5 Auxiliary: Do Macro Conditions Predict National Identification? {#sec-c7-rob}
+
+As in Appendix C.5 (FE) and C.6 (RE), the tables below test whether macro conditions predict within-individual changes in national identification itself. None of the four indicators is expected to predict Britishness or Englishness — if they did, the interaction terms in C.7.1–C.7.4 would partly reflect macro-induced identity change rather than pure contextual moderation. A cubic wave polynomial is used here because macro indicators are collinear with wave dummies.
+
+```{r tbl-brit-rob}
+modelsummary(
+  list("GDP" = m_brit_rob_gdp, "Unemp." = m_brit_rob_unemp,
+       "Claimant" = m_brit_rob_claim, "CPIH" = m_brit_rob_cpih),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(gdp_pc = "GDP per capita", unempl_rate = "Nat. unemp. rate",
+                  claimant_k = "Claimant count", cpih_rate = "CPIH inflation"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.18. Auxiliary: Do Macro Conditions Predict Britishness? (Mundlak CRE)",
+  notes   = "REML. Random intercept for respondent. Cubic wave polynomial suppressed. DV: Britishness (1–7).",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+```{r tbl-engl-rob}
+modelsummary(
+  list("GDP" = m_engl_rob_gdp, "Unemp." = m_engl_rob_unemp,
+       "Claimant" = m_engl_rob_claim, "CPIH" = m_engl_rob_cpih),
+  coef_omit   = OMIT_WAVE,
+  coef_rename = c(gdp_pc = "GDP per capita", unempl_rate = "Nat. unemp. rate",
+                  claimant_k = "Claimant count", cpih_rate = "CPIH inflation"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table C7.19. Auxiliary: Do Macro Conditions Predict Englishness? (Mundlak CRE)",
+  notes   = "REML. Random intercept for respondent. Cubic wave polynomial suppressed. DV: Englishness (1–7).",
+  escape  = FALSE, output = "kableExtra"
+) |> kable_styling()
+```
+
+---
+
+*End of Appendix C.7.*
