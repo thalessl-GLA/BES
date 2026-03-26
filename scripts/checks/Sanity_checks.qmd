@@ -27,7 +27,8 @@ library(purrr)
 
 # Load frozen dataset
 
-BES <- readRDS("BES_subset_panel_full_v3.rds")
+library(here)
+BES <- readRDS(here("BES_subset_panel_full_v3.rds"))
 
 get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
 

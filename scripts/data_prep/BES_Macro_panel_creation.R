@@ -8,7 +8,8 @@ library(readr)
 
 # Open file
 
-BES_subset_panel_full_v1 <- readRDS("BES_subset_panel_full_v1.rds")
+library(here)
+BES_subset_panel_full_v1 <- readRDS(here("BES_subset_panel_full_v1.rds"))
 
 # 1) Identify all starttime wave variables
 start_vars <- grep("^starttimeW\\d+$", names(BES_subset_panel_full_v1), value = TRUE)

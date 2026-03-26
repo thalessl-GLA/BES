@@ -643,7 +643,9 @@ BES_subset_panel_full_v1 %>%
     pct_with_unempW11   = mean(!is.na(unemp_rate_meanW11))
   )
 
+library(here)
+
 saveRDS(
   BES_subset_panel_full_v1,
-  file = "BES_subset_panel_full_v1.rds"
+  file = here("BES_subset_panel_full_v1.rds")
 )
