@@ -3,8 +3,110 @@ library(tidyr)
 library(stringr)
 library(ggplot2)
 
+# =========================================================
+# Figure: National identity and immigration attitudes over time
+# Wave-specific OLS associations: immigSelf ~ Britishness / Englishness
+# =========================================================
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(haven)
+library(here)
+
 # ---------------------------------------------------------
-# 1) Build month/year labels from actual starttime variables
+# 0) Load data
+# ---------------------------------------------------------
+
+df <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds"
+)
+
+# ---------------------------------------------------------
+# 1) Identify overlapping waves
+# ---------------------------------------------------------
+
+immig_cols <- grep("^immigSelfW[0-9]+$", names(df), value = TRUE)
+brit_cols  <- grep("^britishnessW[0-9]+$", names(df), value = TRUE)
+engl_cols  <- grep("^englishnessW[0-9]+$", names(df), value = TRUE)
+
+immig_waves <- as.integer(str_extract(immig_cols, "[0-9]+"))
+brit_waves  <- as.integer(str_extract(brit_cols,  "[0-9]+"))
+engl_waves  <- as.integer(str_extract(engl_cols,  "[0-9]+"))
+
+common_waves <- sort(Reduce(intersect, list(immig_waves, brit_waves, engl_waves)))
+
+# ---------------------------------------------------------
+# 2) Reshape variables to long format
+# ---------------------------------------------------------
+
+make_long_var <- function(data, prefix, value_name, waves) {
+  cols <- paste0(prefix, waves)
+  
+  data %>%
+    select(id, all_of(cols)) %>%
+    mutate(across(-id, ~ as.numeric(haven::zap_labels(.x)))) %>%
+    pivot_longer(
+      cols = -id,
+      names_to = "wave_raw",
+      values_to = value_name
+    ) %>%
+    mutate(wave = as.integer(str_extract(wave_raw, "[0-9]+"))) %>%
+    select(id, wave, all_of(value_name))
+}
+
+immig_long <- make_long_var(df, "immigSelfW",   "immigSelf",   common_waves)
+brit_long  <- make_long_var(df, "britishnessW", "britishness", common_waves)
+engl_long  <- make_long_var(df, "englishnessW", "englishness", common_waves)
+
+plot_df <- immig_long %>%
+  left_join(brit_long, by = c("id", "wave")) %>%
+  left_join(engl_long, by = c("id", "wave")) %>%
+  mutate(
+    immigSelf   = if_else(immigSelf >= 0 & immigSelf <= 10, immigSelf, NA_real_),
+    britishness = if_else(britishness %in% 1:7, britishness, NA_real_),
+    englishness = if_else(englishness %in% 1:7, englishness, NA_real_)
+  )
+
+# ---------------------------------------------------------
+# 3) Estimate wave-specific OLS coefficients
+# ---------------------------------------------------------
+
+run_wave_lm <- function(data, xvar) {
+  fml <- as.formula(paste0("immigSelf ~ ", xvar))
+  fit <- lm(fml, data = data)
+  
+  est <- coef(summary(fit))[xvar, "Estimate"]
+  se  <- coef(summary(fit))[xvar, "Std. Error"]
+  
+  tibble(
+    estimate  = est,
+    conf.low  = est - 1.96 * se,
+    conf.high = est + 1.96 * se
+  )
+}
+
+brit_results <- plot_df %>%
+  filter(!is.na(immigSelf), !is.na(britishness)) %>%
+  group_by(wave) %>%
+  group_modify(~ run_wave_lm(.x, "britishness")) %>%
+  ungroup() %>%
+  mutate(identity = "Britishness")
+
+engl_results <- plot_df %>%
+  filter(!is.na(immigSelf), !is.na(englishness)) %>%
+  group_by(wave) %>%
+  group_modify(~ run_wave_lm(.x, "englishness")) %>%
+  ungroup() %>%
+  mutate(identity = "Englishness")
+
+coef_df <- bind_rows(brit_results, engl_results) %>%
+  arrange(identity, wave)
+
+
+# ---------------------------------------------------------
+# 4) Build month/year labels from actual starttime variables
 # ---------------------------------------------------------
 
 start_cols <- grep("^starttimeW[0-9]+$", names(df), value = TRUE)
@@ -37,7 +139,7 @@ coef_df_plot <- coef_df %>%
   arrange(identity, wave)
 
 # ---------------------------------------------------------
-# 2) Choose readable x-axis breaks
+# 5) Choose readable x-axis breaks
 # You can adjust these if you want fewer/more labels
 # ---------------------------------------------------------
 
@@ -52,7 +154,7 @@ x_labels <- coef_df_plot %>%
   pull(wave_label)
 
 # ---------------------------------------------------------
-# 3) APSR-style plot
+# 6) APSR-style plot
 # ---------------------------------------------------------
 
 ref_wave_2016 <- wave_dates %>%
@@ -68,7 +170,7 @@ ref_wave_2021 <- wave_dates %>%
   pull(wave)
 
 # ---------------------------------------------------------
-# 2) Fewer x-axis labels for readability
+# 7) Fewer x-axis labels for readability
 # ---------------------------------------------------------
 
 selected_waves <- c(7, 9, 13, 16, 20, 21, 23, 26, 29, 30)
@@ -79,7 +181,7 @@ selected_labels_df <- coef_df_plot %>%
   arrange(wave)
 
 # ---------------------------------------------------------
-# 3) APSR-style plot
+# 8) APSR-style plot
 # ---------------------------------------------------------
 
 p_apsr <- ggplot(
@@ -160,10 +262,10 @@ p_apsr <- ggplot(
     labels = selected_labels_df$wave_label
   ) +
   labs(
-    title = "National identity and immigration attitudes over time",
+    title = "Figure 1: National identity and immigration attitudes over time",
     subtitle = "Wave-specific associations in the BES Internet Panel",
     x = NULL,
-    y = "Association with immigration attitudes",
+    y = "Effect on restrictive immigration attitudes (higher = more restrictive)",
     colour = NULL,
     shape = NULL,
     linetype = NULL,
@@ -173,10 +275,8 @@ p_apsr <- ggplot(
       "Vertical lines mark the June 2016 EU referendum and the onset of the post-2021 cost-of-living period."
     )
   ) +
-  coord_cartesian(
-    ylim = c(-0.75, -0.30),
-    clip = "off"
-  ) +
+  scale_y_continuous(trans = "reverse") +
+  coord_cartesian(ylim = c(-0.30, -0.75), clip = "off") +
   theme_classic(base_size = 12, base_family = "Times New Roman") +
   theme(
     panel.grid = element_blank(),

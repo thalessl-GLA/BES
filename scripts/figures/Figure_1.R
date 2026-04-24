@@ -61,7 +61,7 @@ ggplot(plot_df, aes(x = wave, y = estimate, group = identity, shape = identity, 
   scale_linetype_manual(values = c("Britishness" = "solid", "Englishness" = "dashed")) +
   scale_x_continuous(breaks = sort(unique(plot_df$wave))) +
   labs(
-    title = "Figure 1. Wave-specific within-individual effects of Britishness and Englishness on immigration attitudes",
+    title = "Figure 2. Wave-specific within-individual effects of Britishness and Englishness on immigration attitudes",
     x = "BES wave",
     y = "Within-individual coefficient on immigration attitudes",
     shape = NULL,
