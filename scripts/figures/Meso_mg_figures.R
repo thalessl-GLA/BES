@@ -440,7 +440,7 @@ p_meso_combined <- (
 ) +
   plot_layout(guides = "collect") +
   plot_annotation(
-    title = "Meso-level activation: local economic context conditions identity effects",
+    title = "Figure 3: Meso-level activation: local economic context conditions identity effects",
     subtitle = "Marginal effect of national identity across constituency-level economic indicators",
     caption = paste(
       "Lower values of the dependent variable indicate more restrictive immigration attitudes.",
@@ -529,7 +529,7 @@ print(p_meso_engl)
 dir.create(here("outputs", "figures"), recursive = TRUE, showWarnings = FALSE)
 
 ggsave(
-  here("outputs", "figures", "h3_meso_marginal_effects_combined.png"),
+  here("h3_meso_marginal_effects_combined.png"),
   p_meso_combined,
   width = 13,
   height = 5.2,

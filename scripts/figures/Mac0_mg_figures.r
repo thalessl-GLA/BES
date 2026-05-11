@@ -294,7 +294,7 @@ p_macro <- ggplot(
     )
   ) +
   labs(
-    title = "Macro-level activation: national economic conditions condition identity effects",
+    title = "Figure 4: Macro-level activation: national economic conditions condition identity effects",
     subtitle = "Marginal effect of national identity across UK macroeconomic indicators",
     x = NULL,
     y = "Marginal effect of identity on immigration attitudes",
