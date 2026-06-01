@@ -8,7 +8,7 @@
 library(readxl)
 library(tidyverse)
 
-path_gdp <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/regionalgrossdomesticproductgdplocalauthorities.xlsx"
+path_gdp <- "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/Meso_variables/regionalgrossdomesticproductgdplocalauthorities.xlsx"
 
 # =============================================================================
 # 1. TABLE 7: GDP PER HEAD (pre-computed by ONS — primary variable)
