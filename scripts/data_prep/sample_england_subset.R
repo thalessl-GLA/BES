@@ -50,11 +50,11 @@ bes_la <- BES %>%
   mutate(id = as.character(id))
 
 # Ensure id is character in subset panel
-BES_subset_panel_full_v3_England <- BES_subset_panel_full_v3_England %>%
+BES_subset_panel_full_v3_engl <- BES_subset_panel_full_v3_engl %>%
   mutate(id = as.character(id))
 
 # Join
-BES_subset_panel_full_v4_England <- BES_subset_panel_full_v3_England %>%
+BES_subset_panel_full_v4_England <- BES_subset_panel_full_v3_engl %>%
   left_join(bes_la, by = "id")
 
 # Verify number of obs
