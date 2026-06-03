@@ -1,0 +1,710 @@
+---
+title: "Online Appendix B.6: Meso-Level Models — Random Effects - Local Authority"
+subtitle: "Estimator Comparison for Constituency-Level Economic Context (Britishness and Englishness)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(haven)
+library(purrr)
+library(lme4)
+library(lmerTest)
+library(modelsummary)
+library(kableExtra)
+
+options(modelsummary_factory_default = "kableExtra")
+
+GOF_MAP <- tribble(
+  ~raw,            ~clean,         ~fmt,
+  "nobs",          "Observations", 0,
+  "adj.r.squared", "Adj. R²",      3,
+  "r.squared",     "R²",           3,
+  "AIC",           "AIC",          1,
+  "BIC",           "BIC",          1
+)
+
+# bobyqa + fixed wave dummies throughout (same strategy as Appendix A.6 v2)
+ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v5_England.rds")
+
+DV_BASE          <- "immigSelf"
+BRIT_BASE        <- "britishness"
+ENG_BASE         <- "englishness"
+TIME_BASE        <- "starttime"
+AGE_BASE         <- "age"
+MESO_UNEMP_BASE  <- "unemployment_rate"
+MESO_CLAIM_BASE  <- "claimant_rate"
+MESO_INCOME_BASE <- "earnings_median"
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+make_meso_long <- function(df, base, out_name, waves_keep) {
+  cols <- names(df) |> str_subset(paste0("^", base, "W\\d+$"))
+  if (length(cols) == 0) return(NULL)
+  tmp <- tibble(col = cols) |>
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) |>
+    filter(wave %in% waves_keep)
+  if (nrow(tmp) == 0) return(NULL)
+  use_cols <- tmp$col
+  df |>
+    select(id, all_of(use_cols)) |>
+    mutate(across(all_of(use_cols),
+                  ~ as.numeric(if (inherits(.x, "haven_labelled")) zap_labels(.x) else .x))) |>
+    pivot_longer(cols = -id, names_to = "wave", values_to = out_name,
+                 names_pattern = paste0("^", base, "W(\\d+)$")) |>
+    mutate(wave = as.integer(wave))
+}
+```
+
+```{r build-panels-brit, include=FALSE}
+w_dv   <- waves_available(df, DV_BASE)
+w_brit <- waves_available(df, BRIT_BASE)
+w_time <- waves_available(df, TIME_BASE)
+w_age  <- waves_available(df, AGE_BASE)
+
+waves      <- Reduce(intersect, list(w_dv, w_brit, w_time))
+waves_age  <- intersect(waves, w_age)
+
+core_cols <- c(
+  paste0(DV_BASE,   "W", waves),
+  paste0(BRIT_BASE, "W", waves),
+  paste0(TIME_BASE, "W", waves),
+  paste0(AGE_BASE,  "W", waves_age)
+)
+
+panel_long <- df |>
+  mutate(across(any_of(core_cols), ~ {
+    x <- .x; if (inherits(x, "haven_labelled")) x <- zap_labels(x); x
+  })) |>
+  select(id, any_of(core_cols)) |>
+  pivot_longer(cols = -id, names_to = c(".value", "wave"),
+               names_pattern = "(.+)W(\\d+)$") |>
+  mutate(
+    wave             = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed,
+                                suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(dv = all_of(DV_BASE), brit = all_of(BRIT_BASE), age = all_of(AGE_BASE)) |>
+  mutate(dv = as.numeric(dv), brit = as.numeric(brit), age = as.numeric(age)) |>
+  filter(!is.na(dv), !is.na(brit), !is.na(wave))
+
+meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemployment_rate", waves)
+meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_rate",   waves)
+meso_income <- make_meso_long(df, MESO_INCOME_BASE, "earnings_median",     waves)
+
+panel_meso <- panel_long
+if (!is.null(meso_unemp))  panel_meso <- left_join(panel_meso, meso_unemp,  by = c("id", "wave"))
+if (!is.null(meso_claim))  panel_meso <- left_join(panel_meso, meso_claim,  by = c("id", "wave"))
+if (!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = c("id", "wave"))
+
+# categorical panels
+panel_meso_cat <- panel_meso |>
+  mutate(brit = as.numeric(haven::zap_labels(brit)),
+         age  = as.numeric(haven::zap_labels(age)),
+         dv   = as.numeric(haven::zap_labels(dv))) |>
+  filter(!is.na(dv), !is.na(brit), brit %in% 1:7, !is.na(wave)) |>
+  mutate(brit_cat = relevel(factor(brit, levels = 1:7), ref = "7"))
+```
+
+```{r build-panels-engl, include=FALSE}
+w_eng      <- waves_available(df, ENG_BASE)
+waves_eng  <- Reduce(intersect, list(w_dv, w_eng, w_time))
+waves_eng_age <- intersect(waves_eng, w_age)
+
+core_cols_eng <- c(
+  paste0(DV_BASE,  "W", waves_eng),
+  paste0(ENG_BASE, "W", waves_eng),
+  paste0(TIME_BASE,"W", waves_eng),
+  paste0(AGE_BASE, "W", waves_eng_age)
+)
+
+panel_long_eng <- df |>
+  mutate(across(any_of(core_cols_eng), ~ {
+    x <- .x; if (inherits(x, "haven_labelled")) x <- zap_labels(x); x
+  })) |>
+  select(id, any_of(core_cols_eng)) |>
+  pivot_longer(cols = -id, names_to = c(".value", "wave"),
+               names_pattern = "(.+)W(\\d+)$") |>
+  mutate(
+    wave             = as.integer(wave),
+    starttime_chr    = as.character(.data[[TIME_BASE]]),
+    starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+    starttime_parsed = coalesce(starttime_parsed,
+                                suppressWarnings(ymd(starttime_chr, quiet = TRUE))),
+    year = year(starttime_parsed)
+  ) |>
+  rename(dv = all_of(DV_BASE), engl = all_of(ENG_BASE), age = all_of(AGE_BASE)) |>
+  mutate(
+    dv   = as.numeric(dv),
+    engl = as.numeric(engl),
+    age  = as.numeric(age),
+    engl = dplyr::na_if(engl, 9999)
+  ) |>
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave))
+
+meso_unemp_eng  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemployment_rate", waves_eng)
+meso_claim_eng  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_rate",   waves_eng)
+meso_income_eng <- make_meso_long(df, MESO_INCOME_BASE, "earnings_median",     waves_eng)
+
+panel_meso_eng <- panel_long_eng
+if (!is.null(meso_unemp_eng))  panel_meso_eng <- left_join(panel_meso_eng, meso_unemp_eng,  by = c("id", "wave"))
+if (!is.null(meso_claim_eng))  panel_meso_eng <- left_join(panel_meso_eng, meso_claim_eng,  by = c("id", "wave"))
+if (!is.null(meso_income_eng)) panel_meso_eng <- left_join(panel_meso_eng, meso_income_eng, by = c("id", "wave"))
+
+panel_meso_eng_cat <- panel_meso_eng |>
+  mutate(engl = as.numeric(if (inherits(engl, "haven_labelled")) haven::zap_labels(engl) else engl),
+         age  = as.numeric(if (inherits(age,  "haven_labelled")) haven::zap_labels(age)  else age),
+         dv   = as.numeric(if (inherits(dv,   "haven_labelled")) haven::zap_labels(dv)   else dv),
+         engl = dplyr::na_if(engl, 9999)) |>
+  filter(!is.na(dv), !is.na(engl), engl %in% 1:7, !is.na(wave)) |>
+  mutate(engl_cat = relevel(factor(engl, levels = 1:7), ref = "7"))
+```
+
+```{r estimate-brit, include=FALSE}
+panel_u <- panel_meso |> filter(!is.na(unemployment_rate))
+panel_c <- panel_meso |> filter(!is.na(claimant_rate))
+panel_i <- panel_meso |> filter(!is.na(earnings_median))
+
+# Unemployment — Britishness continuous
+m_u0.1_re <- lmer(dv ~ unemployment_rate             + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+m_u1_re   <- lmer(dv ~ brit + unemployment_rate       + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+m_u0.2_re <- lmer(dv ~ unemployment_rate + age        + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+m_u2_re   <- lmer(dv ~ brit + unemployment_rate + age + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+m_u3_re   <- lmer(dv ~ brit * unemployment_rate       + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+m_u4_re   <- lmer(dv ~ brit * unemployment_rate + age + factor(wave) + (1|id), data = panel_u, REML = TRUE, control = ctrl)
+
+# Claimant — Britishness continuous
+m_c0.1_re <- lmer(dv ~ claimant_rate               + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+m_c1_re   <- lmer(dv ~ brit + claimant_rate         + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+m_c0.2_re <- lmer(dv ~ claimant_rate + age          + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+m_c2_re   <- lmer(dv ~ brit + claimant_rate + age   + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+m_c3_re   <- lmer(dv ~ brit * claimant_rate         + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+m_c4_re   <- lmer(dv ~ brit * claimant_rate + age   + factor(wave) + (1|id), data = panel_c, REML = TRUE, control = ctrl)
+
+# Income — Britishness continuous
+m_i0.1_re <- lmer(dv ~ earnings_median                 + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+m_i1_re   <- lmer(dv ~ brit + earnings_median           + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+m_i0.2_re <- lmer(dv ~ earnings_median + age            + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+m_i2_re   <- lmer(dv ~ brit + earnings_median + age     + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+m_i3_re   <- lmer(dv ~ brit * earnings_median           + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+m_i4_re   <- lmer(dv ~ brit * earnings_median + age     + factor(wave) + (1|id), data = panel_i, REML = TRUE, control = ctrl)
+```
+
+```{r estimate-brit-cat, include=FALSE}
+panel_u_cat <- panel_meso_cat |> filter(!is.na(unemployment_rate))
+panel_c_cat <- panel_meso_cat |> filter(!is.na(claimant_rate))
+panel_i_cat <- panel_meso_cat |> filter(!is.na(earnings_median))
+
+m_u1_cat_re <- lmer(dv ~ brit_cat + unemployment_rate       + factor(wave) + (1|id), data = panel_u_cat, REML = TRUE, control = ctrl)
+m_u2_cat_re <- lmer(dv ~ brit_cat + unemployment_rate + age + factor(wave) + (1|id), data = panel_u_cat, REML = TRUE, control = ctrl)
+m_u3_cat_re <- lmer(dv ~ brit_cat * unemployment_rate       + factor(wave) + (1|id), data = panel_u_cat, REML = TRUE, control = ctrl)
+m_u4_cat_re <- lmer(dv ~ brit_cat * unemployment_rate + age + factor(wave) + (1|id), data = panel_u_cat, REML = TRUE, control = ctrl)
+
+m_c1_cat_re <- lmer(dv ~ brit_cat + claimant_rate         + factor(wave) + (1|id), data = panel_c_cat, REML = TRUE, control = ctrl)
+m_c2_cat_re <- lmer(dv ~ brit_cat + claimant_rate + age   + factor(wave) + (1|id), data = panel_c_cat, REML = TRUE, control = ctrl)
+m_c3_cat_re <- lmer(dv ~ brit_cat * claimant_rate         + factor(wave) + (1|id), data = panel_c_cat, REML = TRUE, control = ctrl)
+m_c4_cat_re <- lmer(dv ~ brit_cat * claimant_rate + age   + factor(wave) + (1|id), data = panel_c_cat, REML = TRUE, control = ctrl)
+
+m_i1_cat_re <- lmer(dv ~ brit_cat + earnings_median           + factor(wave) + (1|id), data = panel_i_cat, REML = TRUE, control = ctrl)
+m_i2_cat_re <- lmer(dv ~ brit_cat + earnings_median + age     + factor(wave) + (1|id), data = panel_i_cat, REML = TRUE, control = ctrl)
+# No categorical × income interaction tables (see note in B.6.2.3)
+```
+
+```{r estimate-engl, include=FALSE}
+panel_u_eng <- panel_meso_eng |> filter(!is.na(unemployment_rate))
+panel_c_eng <- panel_meso_eng |> filter(!is.na(claimant_rate))
+panel_i_eng <- panel_meso_eng |> filter(!is.na(earnings_median))
+
+m_u0.1_eng_re <- lmer(dv ~ unemployment_rate              + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+m_u1_eng_re   <- lmer(dv ~ engl + unemployment_rate        + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+m_u0.2_eng_re <- lmer(dv ~ unemployment_rate + age         + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+m_u2_eng_re   <- lmer(dv ~ engl + unemployment_rate + age  + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+m_u3_eng_re   <- lmer(dv ~ engl * unemployment_rate        + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+m_u4_eng_re   <- lmer(dv ~ engl * unemployment_rate + age  + factor(wave) + (1|id), data = panel_u_eng, REML = TRUE, control = ctrl)
+
+m_c0.1_eng_re <- lmer(dv ~ claimant_rate                 + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+m_c1_eng_re   <- lmer(dv ~ engl + claimant_rate          + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+m_c0.2_eng_re <- lmer(dv ~ claimant_rate + age           + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+m_c2_eng_re   <- lmer(dv ~ engl + claimant_rate + age    + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+m_c3_eng_re   <- lmer(dv ~ engl * claimant_rate          + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+m_c4_eng_re   <- lmer(dv ~ engl * claimant_rate + age    + factor(wave) + (1|id), data = panel_c_eng, REML = TRUE, control = ctrl)
+
+m_i0.1_eng_re <- lmer(dv ~ earnings_median                   + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+m_i1_eng_re   <- lmer(dv ~ engl + earnings_median            + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+m_i0.2_eng_re <- lmer(dv ~ earnings_median + age             + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+m_i2_eng_re   <- lmer(dv ~ engl + earnings_median + age      + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+m_i3_eng_re   <- lmer(dv ~ engl * earnings_median            + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+m_i4_eng_re   <- lmer(dv ~ engl * earnings_median + age      + factor(wave) + (1|id), data = panel_i_eng, REML = TRUE, control = ctrl)
+```
+
+```{r estimate-engl-cat, include=FALSE}
+panel_u_eng_cat <- panel_meso_eng_cat |> filter(!is.na(unemployment_rate))
+panel_c_eng_cat <- panel_meso_eng_cat |> filter(!is.na(claimant_rate))
+panel_i_eng_cat <- panel_meso_eng_cat |> filter(!is.na(earnings_median))
+
+m_u1_eng_cat_re <- lmer(dv ~ engl_cat + unemployment_rate       + factor(wave) + (1|id), data = panel_u_eng_cat, REML = TRUE, control = ctrl)
+m_u2_eng_cat_re <- lmer(dv ~ engl_cat + unemployment_rate + age + factor(wave) + (1|id), data = panel_u_eng_cat, REML = TRUE, control = ctrl)
+m_u3_eng_cat_re <- lmer(dv ~ engl_cat * unemployment_rate       + factor(wave) + (1|id), data = panel_u_eng_cat, REML = TRUE, control = ctrl)
+m_u4_eng_cat_re <- lmer(dv ~ engl_cat * unemployment_rate + age + factor(wave) + (1|id), data = panel_u_eng_cat, REML = TRUE, control = ctrl)
+
+m_c1_eng_cat_re <- lmer(dv ~ engl_cat + claimant_rate         + factor(wave) + (1|id), data = panel_c_eng_cat, REML = TRUE, control = ctrl)
+m_c2_eng_cat_re <- lmer(dv ~ engl_cat + claimant_rate + age   + factor(wave) + (1|id), data = panel_c_eng_cat, REML = TRUE, control = ctrl)
+m_c3_eng_cat_re <- lmer(dv ~ engl_cat * claimant_rate         + factor(wave) + (1|id), data = panel_c_eng_cat, REML = TRUE, control = ctrl)
+m_c4_eng_cat_re <- lmer(dv ~ engl_cat * claimant_rate + age   + factor(wave) + (1|id), data = panel_c_eng_cat, REML = TRUE, control = ctrl)
+
+m_i1_eng_cat_re <- lmer(dv ~ engl_cat + earnings_median           + factor(wave) + (1|id), data = panel_i_eng_cat, REML = TRUE, control = ctrl)
+m_i2_eng_cat_re <- lmer(dv ~ engl_cat + earnings_median + age     + factor(wave) + (1|id), data = panel_i_eng_cat, REML = TRUE, control = ctrl)
+# No categorical × income interaction tables (see note in B.6.4.3)
+```
+
+------------------------------------------------------------------------
+
+This appendix reports random-effects (RE) equivalents of the fixed-effects meso-level models in Appendix B1. All RE models are estimated via REML with a random intercept for respondent (`1|id`); wave effects are modelled as fixed dummies (`factor(wave)`), consistent with the identification strategy of Appendix B and avoiding the instability of estimating a wave-level variance component from the small number of available survey waves. Unlike the individual FE estimator, the RE estimator draws on both within- and between-person covariance, so RE identity coefficients are substantially larger throughout. Where RE and FE interaction terms converge, confidence in the underlying signal is strengthened; where they diverge, a significant RE interaction alongside a null FE interaction indicates stable cross-sectional sorting rather than within-individual activation of the kind the paper's theoretical arguments require. This interpretive frame applies throughout Sections B.6.1–B.6.4. Wave dummy coefficients are suppressed from all tables for readability.
+
+------------------------------------------------------------------------
+
+# B.6.1 Main Models: Britishness (Continuous) {#sec-b6-brit}
+
+## B.6.1.1 Local Unemployment Rate {#sec-b6-brit-unemp}
+
+The RE unemployment main-effect coefficients are comparable in sign and direction to the FE estimates in Appendix B.1. The Britishness coefficient is larger under RE, as expected given the inclusion of the between-person component. The interaction models, however, yield no evidence of meaningful conditional moderation: the interaction term between Britishness and unemployment is negative but small and non-significant in both specifications (β ≈ −0.002, p \> 0.1), and this null is unchanged by the inclusion of age controls. The convergence with the FE null in Appendix B.1 strengthens the interpretation that local unemployment does not conditionally activate immigration attitudes through national identity, either within individuals or in cross-sectional sorting.
+
+```{r b6-brit-unemp-main}
+modelsummary(
+  list(
+    "(1) Unemp only"    = m_u0.1_re,
+    "(2) + Britishness" = m_u1_re,
+    "(3) Unemp + Age"   = m_u0.2_re,
+    "(4) + Britishness" = m_u2_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", unemployment_rate = "Unemp. rate (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.1. Local Unemployment Rate: Random-Effects Main Effects (Britishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-brit-unemp-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_u3_re,
+    "(2) Interaction + Age" = m_u4_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", unemployment_rate = "Unemp. rate (local)",
+                  "brit:unemployment_rate" = "Britishness × Unemp. rate", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.2. Local Unemployment Rate × Britishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.1.2 Claimant Count {#sec-b6-brit-claimant}
+
+The claimant-count RE results broadly parallel the unemployment pattern. Neither the claimant main effect nor its interaction with Britishness achieves significance in the interaction models, with the interaction term negative but small and non-significant across both specifications (β ≈ −0.001 to −0.002). This convergence with the FE null in Appendix B.1 again suggests that the absence of a conditional claimant effect is not an artefact of the within-person estimator, but reflects a genuine absence of moderation by Britishness at the meso level, whether estimated within or across individuals.
+
+```{r b6-brit-claimant-main}
+modelsummary(
+  list(
+    "(1) Claimant only"  = m_c0.1_re,
+    "(2) + Britishness"  = m_c1_re,
+    "(3) Claimant + Age" = m_c0.2_re,
+    "(4) + Britishness"  = m_c2_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", claimant_rate = "Claimant count (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.3. Claimant Count: Random-Effects Main Effects (Britishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-brit-claimant-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_c3_re,
+    "(2) Interaction + Age" = m_c4_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", claimant_rate = "Claimant count (local)",
+                  "brit:claimant_rate" = "Britishness × Claimant count", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.4. Claimant Count × Britishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.1.3 Local Income (ASHE) {#sec-b6-brit-income}
+
+In contrast to the unemployment and claimant models, local income exhibits a significant and consistent pattern under RE. The income main effect is positive and precisely estimated across all main-effect specifications. In the interaction models, the Britishness main effect becomes small and non-significant, while the income main effect remains positive and significant (β ≈ 0.002–0.003), and the Britishness × local income interaction is negative and highly significant across both specifications (p \< 0.001). This mirrors the FE interaction result in Appendix B.1 and reinforces the interpretation that higher local earnings are associated with more restrictive attitudes among weaker identifiers, with the effect attenuating as Britishness increases. That the income interaction survives under both estimators, drawing on within and between-person variance respectively, strengthens confidence in the underlying conditional signal.
+
+```{r b6-brit-income-main}
+modelsummary(
+  list(
+    "(1) Income only"   = m_i0.1_re,
+    "(2) + Britishness" = m_i1_re,
+    "(3) Income + Age"  = m_i0.2_re,
+    "(4) + Britishness" = m_i2_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", earnings_median = "Local income (ASHE)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.5. Local Income (ASHE): Random-Effects Main Effects (Britishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-brit-income-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_i3_re,
+    "(2) Interaction + Age" = m_i4_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(brit = "Britishness", earnings_median = "Local income (ASHE)",
+                  "brit:earnings_median" = "Britishness × Local income", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.6. Local Income (ASHE) × Britishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# B.6.2 Robustness: Britishness (Categorical) {#sec-b6-brit-cat}
+
+The categorical RE specifications confirm the gradient structure observed in Appendix B.6.2 Britishness category coefficients are positive, precisely estimated, and monotonically ordered across all three indicators, consistent with the FE categorical results. For local unemployment, categorical interaction terms are generally small and non-significant, with the exception of brit_cat4 × unemployment_rate, which is positive and significant (β ≈ 0.019–0.020, p \< 0.01), an isolated result that does not constitute a systematic moderation pattern. For claimant count, conditional effects under RE are more structured, with significant positive interactions at brit_cat3 and brit_cat4, and a marginal result at brit_cat2 in the age-controlled specification. These are consistent in direction with the FE categorical patterns in Appendix B.6.2, though the RE estimates again incorporate between-person sorting. Income categorical interaction models are not reported; the additive baseline confirms that the Britishness gradient is stable after conditioning on local income.
+
+## B.6.2.1 Local Unemployment Rate {#sec-b6-cat-brit-unemp}
+
+```{r b6-cat-brit-unemp-main}
+modelsummary(
+  list("(1) No age" = m_u1_cat_re, "(2) Age" = m_u2_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.7. Local Unemployment Rate: Britishness (Categorical) RE Main Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-cat-brit-unemp-int}
+modelsummary(
+  list("(1) Interaction" = m_u3_cat_re, "(2) Interaction + Age" = m_u4_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.8. Local Unemployment Rate × Britishness (Categorical): RE Interaction",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.2.2 Claimant Count {#sec-b6-cat-brit-claimant}
+
+```{r b6-cat-brit-claimant-main}
+modelsummary(
+  list("(1) No age" = m_c1_cat_re, "(2) Age" = m_c2_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.9. Claimant Count: Britishness (Categorical) RE Main Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-cat-brit-claimant-int}
+modelsummary(
+  list("(1) Interaction" = m_c3_cat_re, "(2) Interaction + Age" = m_c4_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.10. Claimant Count × Britishness (Categorical): RE Interaction",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Britishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.2.3 Local Income (ASHE) {#sec-b6-cat-brit-income}
+
+Income categorical interaction terms are not reported in this appendix. As discussed in Appendix A.6, the between-person income sorting observed in the continuous RE models does not reflect a coherent activation gradient across identity positions, and the categorical × income interaction models are computationally expensive without adding interpretive value. The additive categorical baseline below confirms that the Britishness gradient is stable after conditioning on local income.
+
+```{r b6-cat-brit-income-main}
+modelsummary(
+  list("(1) No age" = m_i1_cat_re, "(2) Age" = m_i2_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.11. Local Income (ASHE): Britishness (Categorical) RE Additive Models",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Britishness = 7. Interaction models not shown; see text.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# B.6.3 Main Models: Englishness (Continuous) {#sec-b6-engl}
+
+The Englishness RE meso models replicate the Britishness structure but with the identity dimension replaced by Englishness, following the same logic as Appendix B.3. RE Englishness coefficients are larger than their FE counterparts for the same reason as Britishness: the between-person component — persistently more strongly English respondents holding more restrictive preferences — is added to the within-individual signal. The divergence between RE and FE interaction terms again indicates between-person sorting wherever it appears, and the FE null remains the preferred test for within-individual activation at the meso level.
+
+## B.6.3.1 Local Unemployment Rate {#sec-b6-engl-unemp}
+
+The RE unemployment interaction under Englishness yields a negative and statistically significant interaction term (β ≈ −0.005, p \< 0.01), robust to the inclusion of age controls. This diverges from the FE null in Appendix B.3, where the Englishness × unemployment interaction was zero and non-significant. Following the interpretive frame established at the outset of this appendix, the RE interaction reflects between-person sorting, persistently more strongly English respondents located in lower-unemployment areas holding more restrictive preferences in cross-section — rather than within-individual activation. The FE null therefore remains the appropriate benchmark for the paper's theoretical argument.
+
+```{r b6-engl-unemp-main}
+modelsummary(
+  list(
+    "(1) Unemp only"    = m_u0.1_eng_re,
+    "(2) + Englishness" = m_u1_eng_re,
+    "(3) Unemp + Age"   = m_u0.2_eng_re,
+    "(4) + Englishness" = m_u2_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", unemployment_rate = "Unemp. rate (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.12. Local Unemployment Rate: Random-Effects Main Effects (Englishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-engl-unemp-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_u3_eng_re,
+    "(2) Interaction + Age" = m_u4_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", unemployment_rate = "Unemp. rate (local)",
+                  "engl:unemployment_rate" = "Englishness × Unemp. rate", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.13. Local Unemployment Rate × Englishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.3.2 Claimant Count {#sec-b6-engl-claimant}
+
+The Englishness × claimant count interaction is negative and significant under RE (β ≈ −0.003, p \< 0.01), consistent across both specifications. This aligns with the significant FE interaction in Appendix B.3, where the same conditional pattern was observed within individuals. The convergence across estimators here, unlike the unemployment case, provides stronger grounds for confidence that the claimant moderation by Englishness reflects at least partially a within-person signal rather than purely cross-sectional sorting.
+
+```{r b6-engl-claimant-main}
+modelsummary(
+  list(
+    "(1) Claimant only"  = m_c0.1_eng_re,
+    "(2) + Englishness"  = m_c1_eng_re,
+    "(3) Claimant + Age" = m_c0.2_eng_re,
+    "(4) + Englishness"  = m_c2_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", claimant_rate = "Claimant count (local)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.14. Claimant Count: Random-Effects Main Effects (Englishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-engl-claimant-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_c3_eng_re,
+    "(2) Interaction + Age" = m_c4_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", claimant_rate = "Claimant count (local)",
+                  "engl:claimant_rate" = "Englishness × Claimant count", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.15. Claimant Count × Englishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.3.3 Local Income (ASHE) {#sec-b6-engl-income}
+
+The Englishness income interaction models reveal a negative and highly significant interaction term under RE (p \< 0.001), robust to age controls, with a positive and significant income main effect. This is consistent with the FE income interaction result in Appendix B.5, where the same conditional pattern was observed within individuals. As with the Britishness income result in B.6.1.3, the convergence across estimators strengthens confidence in the conditional signal, though the RE magnitude will partly reflect the between-person component, respondents with weaker Englishness in higher-earning areas holding more permissive attitudes in cross-section.
+
+```{r b6-engl-income-main}
+modelsummary(
+  list(
+    "(1) Income only"   = m_i0.1_eng_re,
+    "(2) + Englishness" = m_i1_eng_re,
+    "(3) Income + Age"  = m_i0.2_eng_re,
+    "(4) + Englishness" = m_i2_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", earnings_median = "Local income (ASHE)", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.16. Local Income (ASHE): Random-Effects Main Effects (Englishness)",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-engl-income-int}
+modelsummary(
+  list(
+    "(1) Interaction"       = m_i3_eng_re,
+    "(2) Interaction + Age" = m_i4_eng_re
+  ),
+  coef_omit   = "factor\\(wave\\)",
+  coef_rename = c(engl = "Englishness", earnings_median = "Local income (ASHE)",
+                  "engl:earnings_median" = "Englishness × Local income", age = "Age"),
+  gof_map = GOF_MAP,
+  stars   = c("*" = .05, "**" = .01, "***" = .001),
+  title   = "Table B6.17. Local Income (ASHE) × Englishness: Random-Effects Interaction",
+  notes   = "REML estimation. Random intercept for respondent. Wave dummies included but suppressed. DV: immigSelf.",
+  escape  = FALSE,
+  output  = "kableExtra"
+) |> kable_styling()
+```
+
+------------------------------------------------------------------------
+
+# B.6.4 Robustness: Englishness (Categorical) {#sec-b6-engl-cat}
+
+The categorical Englishness RE specifications confirm the gradient structure observed in Appendix B.1. Englishness category coefficients are positive, precisely estimated, and monotonically ordered across all indicators. For local unemployment, significant positive interactions are concentrated at engl_cat1 (β ≈ 0.037–0.043, p \< 0.001) and engl_cat4 and engl_cat5, with no significant effect at intermediate or higher identity positions, a pattern that again reflects between-person sorting given the FE null in Appendix B.1. For claimant count, conditional effects are significant at engl_cat1 (β ≈ 0.036–0.038, p \< 0.001) and engl_cat2 and engl_cat4, consistent in direction with the FE categorical results and reinforcing the interpretation that claimant sensitivity is concentrated among the weakest English identifiers. Income categorical interaction models are not reported; the additive baseline confirms that the Englishness gradient is stable after conditioning on local income.
+
+## B.6.4.1 Local Unemployment Rate {#sec-b6-cat-engl-unemp}
+
+```{r b6-cat-engl-unemp-main}
+modelsummary(
+  list("(1) No age" = m_u1_eng_cat_re, "(2) Age" = m_u2_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.18. Local Unemployment Rate: Englishness (Categorical) RE Main Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-cat-engl-unemp-int}
+modelsummary(
+  list("(1) Interaction" = m_u3_eng_cat_re, "(2) Interaction + Age" = m_u4_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.19. Local Unemployment Rate × Englishness (Categorical): RE Interaction",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.4.2 Claimant Count {#sec-b6-cat-engl-claimant}
+
+```{r b6-cat-engl-claimant-main}
+modelsummary(
+  list("(1) No age" = m_c1_eng_cat_re, "(2) Age" = m_c2_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.20. Claimant Count: Englishness (Categorical) RE Main Effects",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+```{r b6-cat-engl-claimant-int}
+modelsummary(
+  list("(1) Interaction" = m_c3_eng_cat_re, "(2) Interaction + Age" = m_c4_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.21. Claimant Count × Englishness (Categorical): RE Interaction",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Englishness = 7.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+## B.6.4.3 Local Income (ASHE) {#sec-b6-cat-engl-income}
+
+Income categorical interaction models are not reported here for the same reasons as B.6.2.3. The additive baseline confirms that the Englishness gradient is stable after conditioning on local income.
+
+```{r b6-cat-engl-income-main}
+modelsummary(
+  list("(1) No age" = m_i1_eng_cat_re, "(2) Age" = m_i2_eng_cat_re),
+  coef_omit = "factor\\(wave\\)",
+  gof_map   = GOF_MAP,
+  stars     = c("*" = .05, "**" = .01, "***" = .001),
+  title     = "Table B6.22. Local Income (ASHE): Englishness (Categorical) RE Additive Models",
+  notes     = "REML estimation. Random intercept for respondent. Wave dummies suppressed. Reference: Englishness = 7. Interaction models not shown; see text.",
+  escape    = FALSE,
+  output    = "kableExtra"
+) |> kable_styling()
+```
+
+------------------------------------------------------------------------
+
+*End of Appendix B.6.*

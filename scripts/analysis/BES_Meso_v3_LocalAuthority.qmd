@@ -1,0 +1,354 @@
+---
+title: "BES_Meso_v3_Local Authority"
+format: html
+editor: visual
+---
+
+```{r 0_setup_models, include=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# =============================================================================
+# BES_Meso_v3: Local Authority meso models
+# Adapted from BES_Meso_v2 constituency pipeline
+#
+# Main change from v2:
+#   - Input data: BES_subset_panel_full_v5_England.rds
+#   - Meso geography: Local Authority, using oslauaW* in the merge pipeline
+#   - Meso variables in wide BES file:
+#       unemployment_rateW*  = LA model-based unemployment rate
+#       claimant_rateW*      = LA claimant rate, residents aged 16-64
+#       earnings_medianW*    = LA ASHE median weekly earnings
+# =============================================================================
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(fixest)
+library(haven)
+library(purrr)
+
+# -----------------------------------------------------------------------------
+# 0. Load LA-merged BES panel
+# -----------------------------------------------------------------------------
+
+df <- readRDS(
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v5_England.rds"
+)
+
+# Make sure id exists and is consistently typed
+if (!"id" %in% names(df)) {
+  df <- df %>% mutate(id = row_number())
+}
+
+df <- df %>% mutate(id = as.character(id))
+
+# -----------------------------------------------------------------------------
+# 1. Variable stems
+# -----------------------------------------------------------------------------
+
+DV_BASE   <- "immigSelf"
+BRIT_BASE <- "britishness"
+ENG_BASE  <- "englishness"
+TIME_BASE <- "starttime"
+AGE_BASE  <- "age"
+
+# Local Authority meso families
+MESO_UNEMP_BASE  <- "unemployment_rate"  # LA model-based unemployment rate
+MESO_CLAIM_BASE  <- "claimant_rate"      # LA claimant rate, age 16-64
+MESO_INCOME_BASE <- "earnings_median"    # LA ASHE median weekly earnings
+
+# -----------------------------------------------------------------------------
+# 2. General helpers
+# -----------------------------------------------------------------------------
+
+get_wave <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave)))
+}
+
+clean_numeric <- function(x) {
+  if (inherits(x, "haven_labelled")) x <- haven::zap_labels(x)
+  as.numeric(x)
+}
+
+make_identity_panel <- function(df, identity_base, identity_out, valid_identity = 1:7) {
+  w_dv   <- waves_available(df, DV_BASE)
+  w_id   <- waves_available(df, identity_base)
+  w_time <- waves_available(df, TIME_BASE)
+
+  waves <- Reduce(intersect, list(w_dv, w_id, w_time))
+  if (length(waves) < 3) {
+    stop(paste0("Too few overlapping waves across DV, ", identity_base, ", and starttime."))
+  }
+
+  w_age     <- waves_available(df, AGE_BASE)
+  waves_age <- intersect(waves, w_age)
+
+  core_cols <- c(
+    paste0(DV_BASE,       "W", waves),
+    paste0(identity_base, "W", waves),
+    paste0(TIME_BASE,     "W", waves),
+    paste0(AGE_BASE,      "W", waves_age)
+  )
+
+  df_core <- df %>%
+    mutate(across(any_of(core_cols), ~ {
+      x <- .x
+      if (inherits(x, "haven_labelled")) x <- haven::zap_labels(x)
+      x
+    })) %>%
+    select(id, any_of(core_cols))
+
+  panel_long <- df_core %>%
+    pivot_longer(
+      cols = -id,
+      names_to = c(".value", "wave"),
+      names_pattern = "(.+)W(\\d+)$"
+    ) %>%
+    mutate(
+      wave = as.integer(wave),
+      starttime_chr = as.character(.data[[TIME_BASE]]),
+      starttime_parsed = suppressWarnings(ymd_hms(starttime_chr, quiet = TRUE)),
+      starttime_parsed = coalesce(
+        starttime_parsed,
+        suppressWarnings(ymd(starttime_chr, quiet = TRUE))
+      ),
+      year = year(starttime_parsed)
+    ) %>%
+    rename(
+      dv  = all_of(DV_BASE),
+      idv = all_of(identity_base),
+      age = all_of(AGE_BASE)
+    ) %>%
+    mutate(
+      dv  = clean_numeric(dv),
+      idv = clean_numeric(idv),
+      age = clean_numeric(age),
+      idv = na_if(idv, 9999)
+    ) %>%
+    filter(
+      !is.na(dv),
+      !is.na(idv),
+      idv %in% valid_identity,
+      !is.na(wave)
+    ) %>%
+    rename(!!identity_out := idv)
+
+  list(panel = panel_long, waves = waves)
+}
+
+make_meso_long <- function(df, base, out_name, waves_keep) {
+  cols <- names(df) %>% str_subset(paste0("^", base, "W\\d+$"))
+  if (length(cols) == 0) return(NULL)
+
+  tmp <- tibble(col = cols) %>%
+    mutate(wave = as.integer(str_extract(col, "\\d+$"))) %>%
+    filter(wave %in% waves_keep)
+
+  if (nrow(tmp) == 0) return(NULL)
+
+  use_cols <- tmp$col
+
+  df %>%
+    select(id, all_of(use_cols)) %>%
+    mutate(across(all_of(use_cols), clean_numeric)) %>%
+    pivot_longer(
+      cols = -id,
+      names_to = "wave",
+      values_to = out_name,
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) %>%
+    mutate(wave = as.integer(wave))
+}
+
+add_meso_vars <- function(df, panel_long, waves) {
+  meso_unemp  <- make_meso_long(df, MESO_UNEMP_BASE,  "unemp_rate_la", waves)
+  meso_claim  <- make_meso_long(df, MESO_CLAIM_BASE,  "claimant_rate_la", waves)
+  meso_income <- make_meso_long(df, MESO_INCOME_BASE, "earnings_median_la", waves)
+
+  panel_meso <- panel_long
+  if (!is.null(meso_unemp))  panel_meso <- left_join(panel_meso, meso_unemp,  by = c("id", "wave"))
+  if (!is.null(meso_claim))  panel_meso <- left_join(panel_meso, meso_claim,  by = c("id", "wave"))
+  if (!is.null(meso_income)) panel_meso <- left_join(panel_meso, meso_income, by = c("id", "wave"))
+
+  panel_meso
+}
+
+run_continuous_meso_models <- function(panel_meso, identity_var) {
+  f_id <- as.name(identity_var)
+
+  panel_u <- panel_meso %>% filter(!is.na(unemp_rate_la))
+  panel_c <- panel_meso %>% filter(!is.na(claimant_rate_la))
+  panel_i <- panel_meso %>% filter(!is.na(earnings_median_la))
+
+  list(
+    # Unemployment
+    unemp_only_noage = feols(dv ~ unemp_rate_la | id + wave, data = panel_u, cluster = "id"),
+    unemp_id_noage   = feols(as.formula(paste0("dv ~ ", identity_var, " + unemp_rate_la | id + wave")), data = panel_u, cluster = "id"),
+    unemp_only_age   = feols(dv ~ unemp_rate_la + age | id + wave, data = panel_u, cluster = "id"),
+    unemp_id_age     = feols(as.formula(paste0("dv ~ ", identity_var, " + unemp_rate_la + age | id + wave")), data = panel_u, cluster = "id"),
+    unemp_int_noage  = feols(as.formula(paste0("dv ~ ", identity_var, " * unemp_rate_la | id + wave")), data = panel_u, cluster = "id"),
+    unemp_int_age    = feols(as.formula(paste0("dv ~ ", identity_var, " * unemp_rate_la + age | id + wave")), data = panel_u, cluster = "id"),
+
+    # Claimant rate
+    claimant_only_noage = feols(dv ~ claimant_rate_la | id + wave, data = panel_c, cluster = "id"),
+    claimant_id_noage   = feols(as.formula(paste0("dv ~ ", identity_var, " + claimant_rate_la | id + wave")), data = panel_c, cluster = "id"),
+    claimant_only_age   = feols(dv ~ claimant_rate_la + age | id + wave, data = panel_c, cluster = "id"),
+    claimant_id_age     = feols(as.formula(paste0("dv ~ ", identity_var, " + claimant_rate_la + age | id + wave")), data = panel_c, cluster = "id"),
+    claimant_int_noage  = feols(as.formula(paste0("dv ~ ", identity_var, " * claimant_rate_la | id + wave")), data = panel_c, cluster = "id"),
+    claimant_int_age    = feols(as.formula(paste0("dv ~ ", identity_var, " * claimant_rate_la + age | id + wave")), data = panel_c, cluster = "id"),
+
+    # Earnings
+    income_only_noage = feols(dv ~ earnings_median_la | id + wave, data = panel_i, cluster = "id"),
+    income_id_noage   = feols(as.formula(paste0("dv ~ ", identity_var, " + earnings_median_la | id + wave")), data = panel_i, cluster = "id"),
+    income_only_age   = feols(dv ~ earnings_median_la + age | id + wave, data = panel_i, cluster = "id"),
+    income_id_age     = feols(as.formula(paste0("dv ~ ", identity_var, " + earnings_median_la + age | id + wave")), data = panel_i, cluster = "id"),
+    income_int_noage  = feols(as.formula(paste0("dv ~ ", identity_var, " * earnings_median_la | id + wave")), data = panel_i, cluster = "id"),
+    income_int_age    = feols(as.formula(paste0("dv ~ ", identity_var, " * earnings_median_la + age | id + wave")), data = panel_i, cluster = "id")
+  )
+}
+
+run_categorical_meso_models <- function(panel_meso, identity_var) {
+  panel_cat <- panel_meso %>%
+    mutate(
+      across(all_of(identity_var), clean_numeric),
+      age = clean_numeric(age),
+      dv  = clean_numeric(dv)
+    ) %>%
+    filter(!is.na(dv), !is.na(.data[[identity_var]]), .data[[identity_var]] %in% 1:7, !is.na(wave))
+
+  panel_u <- panel_cat %>% filter(!is.na(unemp_rate_la))
+  panel_c <- panel_cat %>% filter(!is.na(claimant_rate_la))
+  panel_i <- panel_cat %>% filter(!is.na(earnings_median_la))
+
+  list(
+    # Unemployment
+    unemp_cat_noage     = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + unemp_rate_la | id + wave")), data = panel_u, cluster = "id"),
+    unemp_cat_age       = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + unemp_rate_la + age | id + wave")), data = panel_u, cluster = "id"),
+    unemp_cat_int_noage = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * unemp_rate_la | id + wave")), data = panel_u, cluster = "id"),
+    unemp_cat_int_age   = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * unemp_rate_la + age | id + wave")), data = panel_u, cluster = "id"),
+
+    # Claimant rate
+    claimant_cat_noage     = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + claimant_rate_la | id + wave")), data = panel_c, cluster = "id"),
+    claimant_cat_age       = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + claimant_rate_la + age | id + wave")), data = panel_c, cluster = "id"),
+    claimant_cat_int_noage = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * claimant_rate_la | id + wave")), data = panel_c, cluster = "id"),
+    claimant_cat_int_age   = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * claimant_rate_la + age | id + wave")), data = panel_c, cluster = "id"),
+
+    # Earnings
+    income_cat_noage     = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + earnings_median_la | id + wave")), data = panel_i, cluster = "id"),
+    income_cat_age       = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) + earnings_median_la + age | id + wave")), data = panel_i, cluster = "id"),
+    income_cat_int_noage = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * earnings_median_la | id + wave")), data = panel_i, cluster = "id"),
+    income_cat_int_age   = feols(as.formula(paste0("dv ~ i(", identity_var, ", ref = 7) * earnings_median_la + age | id + wave")), data = panel_i, cluster = "id")
+  )
+}
+
+prefix_names <- function(x, prefix) {
+  names(x) <- paste0(prefix, names(x), "_meso_la")
+  x
+}
+
+# -----------------------------------------------------------------------------
+# 3. Build Britishness LA meso panel and models
+# -----------------------------------------------------------------------------
+
+brit_build <- make_identity_panel(df, BRIT_BASE, "brit")
+panel_meso_brit <- add_meso_vars(df, brit_build$panel, brit_build$waves)
+
+coverage_brit_la <- panel_meso_brit %>%
+  summarise(
+    n_obs = n(),
+    pct_unemp_nonmiss    = mean(!is.na(unemp_rate_la)),
+    pct_claimant_nonmiss = mean(!is.na(claimant_rate_la)),
+    pct_earnings_nonmiss = mean(!is.na(earnings_median_la)),
+    pct_age_nonmiss      = mean(!is.na(age))
+  )
+
+models_brit_cont_la <- run_continuous_meso_models(panel_meso_brit, "brit")
+models_brit_cat_la  <- run_categorical_meso_models(panel_meso_brit, "brit")
+
+# -----------------------------------------------------------------------------
+# 4. Build Englishness LA meso panel and models
+# -----------------------------------------------------------------------------
+
+eng_build <- make_identity_panel(df, ENG_BASE, "engl")
+panel_meso_eng <- add_meso_vars(df, eng_build$panel, eng_build$waves)
+
+coverage_eng_la <- panel_meso_eng %>%
+  summarise(
+    n_obs = n(),
+    pct_unemp_nonmiss    = mean(!is.na(unemp_rate_la)),
+    pct_claimant_nonmiss = mean(!is.na(claimant_rate_la)),
+    pct_earnings_nonmiss = mean(!is.na(earnings_median_la)),
+    pct_age_nonmiss      = mean(!is.na(age))
+  )
+
+models_eng_cont_la <- run_continuous_meso_models(panel_meso_eng, "engl")
+models_eng_cat_la  <- run_categorical_meso_models(panel_meso_eng, "engl")
+
+# -----------------------------------------------------------------------------
+# 5. Flat named model list, parallel to BES_Meso_v2
+# -----------------------------------------------------------------------------
+
+models_meso_la <- c(
+  prefix_names(models_brit_cont_la, "brit_cont_"),
+  prefix_names(models_brit_cat_la,  "brit_cat_"),
+  prefix_names(models_eng_cont_la,  "eng_cont_"),
+  prefix_names(models_eng_cat_la,   "eng_cat_")
+)
+
+saveRDS(models_meso_la, "models_meso_la_all.rds")
+
+# Optional: save the model panels for diagnostics and plotting
+saveRDS(panel_meso_brit, "panel_meso_la_britishness_long.rds")
+saveRDS(panel_meso_eng,  "panel_meso_la_englishness_long.rds")
+```
+
+```{r 1_coverage, echo=FALSE, warning=FALSE, message=FALSE}
+coverage_brit_la
+coverage_eng_la
+```
+
+The objective is to assess whether **local-authority-level** economic context, captured through official ONS indicators such as unemployment rates, claimant rates, and local earnings, shapes anti-immigration attitudes, and whether these contextual effects are conditioned by individual-level national identification.
+
+This version replicates the `BES_Meso_v2` modelling strategy, but replaces the parliamentary constituency meso panel with the local authority panel. The three meso variables are: LA unemployment rate, LA claimant rate among residents aged 16--64, and LA median weekly earnings from ASHE.
+
+All models are estimated using linear fixed-effects regressions with individual fixed effects and wave fixed effects. Individual fixed effects control for all time-invariant respondent characteristics, including stable ideological predispositions, cohort effects, and baseline nationalism. Wave fixed effects absorb common national shocks and period-specific influences. Standard errors are clustered at the individual level.
+
+## Meso-level analysis: Local Authority {.tabset}
+
+### Britishness: continuous
+
+```{r 2_brit_continuous_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+lapply(models_brit_cont_la, fixest::coeftable)
+```
+
+### Britishness: categorical
+
+```{r 3_brit_categorical_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+lapply(models_brit_cat_la, fixest::coeftable)
+```
+
+### Englishness: continuous
+
+```{r 4_englishness_continuous_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+lapply(models_eng_cont_la, fixest::coeftable)
+```
+
+### Englishness: categorical
+
+```{r 5_englishness_categorical_summaries, echo=FALSE, warning=FALSE, message=FALSE}
+lapply(models_eng_cat_la, fixest::coeftable)
+```
+
+### Description of local-authority meso variables {#meso-vars-la}
+
+**Local unemployment rate.** This variable measures the model-based unemployment rate at the local authority level. It is merged into the BES panel using local authority code by BES fieldwork year and reshaped into wave-specific variables.
+
+**Claimant rate.** This variable measures claimant count as a rate among residents aged 16--64 at the local authority level. Unlike the constituency version, which used claimant counts, the LA version uses a rate. This makes interpretation closer to a local intensity measure and improves comparability across local authorities of different population sizes.
+
+**Local earnings.** Local income is measured using median weekly earnings from ASHE at the local authority level. This replaces the constituency-level `incomeW*` variables used in `BES_Meso_v2` with `earnings_medianW*`.
+
+```{r 6_save_session_info, echo=FALSE, warning=FALSE, message=FALSE}
+sessionInfo()
+```
