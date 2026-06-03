@@ -27,16 +27,16 @@ library(patchwork)
 # ------------------------------------------------------------
 
 df <- readRDS(
-  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v3_England.rds"
+  "~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v5_England.rds"
 )
 
 DV_BASE   <- "immigSelf"
 TIME_BASE <- "starttime"
 AGE_BASE  <- "age"
 
-MESO_UNEMP_BASE  <- "unemp_rate_mean"
-MESO_CLAIM_BASE  <- "claimant_mean"
-MESO_INCOME_BASE <- "income"
+MESO_UNEMP_BASE  <- "unemployment_rate"
+MESO_CLAIM_BASE  <- "claimant_rate"
+MESO_INCOME_BASE <- "earnings_median"
 
 # ------------------------------------------------------------
 # 1) Helper functions
@@ -149,9 +149,9 @@ add_meso_vars <- function(core_panel, data) {
   
   waves_keep <- sort(unique(core_panel$wave))
   
-  meso_unemp <- make_meso_long(data, MESO_UNEMP_BASE,  "unemp_rate_mean", waves_keep)
-  meso_claim <- make_meso_long(data, MESO_CLAIM_BASE,  "claimant_mean",   waves_keep)
-  meso_inc   <- make_meso_long(data, MESO_INCOME_BASE, "income_meso",     waves_keep)
+  meso_unemp <- make_meso_long(data, MESO_UNEMP_BASE,  "unemployment_rate", waves_keep)
+  meso_claim <- make_meso_long(data, MESO_CLAIM_BASE,  "claimant_rate",   waves_keep)
+  meso_inc   <- make_meso_long(data, MESO_INCOME_BASE, "earnings_median",     waves_keep)
   
   out <- core_panel
   
@@ -223,47 +223,47 @@ panel_engl <- make_core_panel(df, "englishness") %>%
 # ------------------------------------------------------------
 
 # Britishness models — Table 4
-panel_u_brit <- panel_brit %>% filter(!is.na(unemp_rate_mean))
-panel_c_brit <- panel_brit %>% filter(!is.na(claimant_mean))
-panel_i_brit <- panel_brit %>% filter(!is.na(income_meso))
+panel_u_brit <- panel_brit %>% filter(!is.na(unemployment_rate))
+panel_c_brit <- panel_brit %>% filter(!is.na(claimant_rate))
+panel_i_brit <- panel_brit %>% filter(!is.na(earnings_median))
 
 m_u_brit <- feols(
-  dv ~ identity * unemp_rate_mean + age | id + wave,
+  dv ~ identity * unemployment_rate + age | id + wave,
   data = panel_u_brit,
   cluster = "id"
 )
 
 m_c_brit <- feols(
-  dv ~ identity * claimant_mean + age | id + wave,
+  dv ~ identity * claimant_rate + age | id + wave,
   data = panel_c_brit,
   cluster = "id"
 )
 
 m_i_brit <- feols(
-  dv ~ identity * income_meso + age | id + wave,
+  dv ~ identity * earnings_median + age | id + wave,
   data = panel_i_brit,
   cluster = "id"
 )
 
 # Englishness models — Table 5
-panel_u_engl <- panel_engl %>% filter(!is.na(unemp_rate_mean))
-panel_c_engl <- panel_engl %>% filter(!is.na(claimant_mean))
-panel_i_engl <- panel_engl %>% filter(!is.na(income_meso))
+panel_u_engl <- panel_engl %>% filter(!is.na(unemployment_rate))
+panel_c_engl <- panel_engl %>% filter(!is.na(claimant_rate))
+panel_i_engl <- panel_engl %>% filter(!is.na(earnings_median))
 
 m_u_engl <- feols(
-  dv ~ identity * unemp_rate_mean + age | id + wave,
+  dv ~ identity * unemployment_rate + age | id + wave,
   data = panel_u_engl,
   cluster = "id"
 )
 
 m_c_engl <- feols(
-  dv ~ identity * claimant_mean + age | id + wave,
+  dv ~ identity * claimant_rate + age | id + wave,
   data = panel_c_engl,
   cluster = "id"
 )
 
 m_i_engl <- feols(
-  dv ~ identity * income_meso + age | id + wave,
+  dv ~ identity * earnings_median + age | id + wave,
   data = panel_i_engl,
   cluster = "id"
 )
@@ -281,9 +281,9 @@ grid_5_95 <- function(x, n = 100) {
   )
 }
 
-unemp_grid <- grid_5_95(c(panel_u_brit$unemp_rate_mean, panel_u_engl$unemp_rate_mean))
-claim_grid <- grid_5_95(c(panel_c_brit$claimant_mean,   panel_c_engl$claimant_mean))
-inc_grid   <- grid_5_95(c(panel_i_brit$income_meso,     panel_i_engl$income_meso))
+unemp_grid <- grid_5_95(c(panel_u_brit$unemployment_rate, panel_u_engl$unemployment_rate))
+claim_grid <- grid_5_95(c(panel_c_brit$claimant_rate,   panel_c_engl$claimant_rate))
+inc_grid   <- grid_5_95(c(panel_i_brit$earnings_median,     panel_i_engl$earnings_median))
 
 # ------------------------------------------------------------
 # 5) Compute marginal effects
@@ -293,42 +293,42 @@ me_meso <- bind_rows(
   make_marginal_effect_df(
     m_u_brit, unemp_grid,
     identity_term = "identity",
-    moderator_term = "unemp_rate_mean",
+    moderator_term = "unemployment_rate",
     label = "Britishness",
     moderator_name = "Constituency unemployment rate"
   ),
   make_marginal_effect_df(
     m_u_engl, unemp_grid,
     identity_term = "identity",
-    moderator_term = "unemp_rate_mean",
+    moderator_term = "unemployment_rate",
     label = "Englishness",
     moderator_name = "Constituency unemployment rate"
   ),
   make_marginal_effect_df(
     m_c_brit, claim_grid,
     identity_term = "identity",
-    moderator_term = "claimant_mean",
+    moderator_term = "claimant_rate",
     label = "Britishness",
     moderator_name = "Claimant count"
   ),
   make_marginal_effect_df(
     m_c_engl, claim_grid,
     identity_term = "identity",
-    moderator_term = "claimant_mean",
+    moderator_term = "claimant_rate",
     label = "Englishness",
     moderator_name = "Claimant count"
   ),
   make_marginal_effect_df(
     m_i_brit, inc_grid,
     identity_term = "identity",
-    moderator_term = "income_meso",
+    moderator_term = "earnings_median",
     label = "Britishness",
     moderator_name = "Constituency median weekly earnings"
   ),
   make_marginal_effect_df(
     m_i_engl, inc_grid,
     identity_term = "identity",
-    moderator_term = "income_meso",
+    moderator_term = "earnings_median",
     label = "Englishness",
     moderator_name = "Constituency median weekly earnings"
   )
@@ -427,7 +427,7 @@ p_income <- plot_meso_me(
   "Median weekly earnings (£)"
 ) +
   labs(
-    title = "Constituency earnings",
+    title = "Local Authority earnings",
     subtitle = "Local prosperity"
   )
 
@@ -441,7 +441,7 @@ p_meso_combined <- (
   plot_layout(guides = "collect") +
   plot_annotation(
     title = "Figure 3: Meso-level activation: local economic context conditions identity effects",
-    subtitle = "Marginal effect of national identity across constituency-level economic indicators",
+    subtitle = "Marginal effect of national identity across local auth-level economic indicators",
     caption = paste(
       "Lower values of the dependent variable indicate more restrictive immigration attitudes.",
       "Shaded areas show 95% confidence intervals.",
@@ -529,7 +529,7 @@ print(p_meso_engl)
 dir.create(here("outputs", "figures"), recursive = TRUE, showWarnings = FALSE)
 
 ggsave(
-  here("h3_meso_marginal_effects_combined.png"),
+  here("h3_meso_marginal_effects_combined_LA.png"),
   p_meso_combined,
   width = 13,
   height = 5.2,
@@ -537,7 +537,7 @@ ggsave(
 )
 
 ggsave(
-  here("outputs", "figures", "h3_meso_marginal_effects_britishness.png"),
+  here("outputs", "figures", "h3_meso_marginal_effects_britishness_LA.png"),
   p_meso_brit,
   width = 11,
   height = 4.8,
@@ -545,7 +545,7 @@ ggsave(
 )
 
 ggsave(
-  here("outputs", "figures", "h3_meso_marginal_effects_englishness.png"),
+  here("outputs", "figures", "h3_meso_marginal_effects_englishness_LA.png"),
   p_meso_engl,
   width = 11,
   height = 4.8,
