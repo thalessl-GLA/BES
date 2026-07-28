@@ -1,82 +1,108 @@
+# ============================================================
+# R / RStudio
+# ============================================================
+
 # History files
 .Rhistory
 .Rapp.history
+.Rhistory_backup
 
-# Session Data files
+# Session/workspace files
 .RData
 .RDataTmp
+.RDataTmp*
+.RData_backup
 
 # User-specific files
 .Ruserdata
 
+# RStudio project state
+.Rproj.user/
+
+# R environment variables
+.Renviron
+
+
+# ============================================================
+# R package/build files
+# ============================================================
+
 # Example code in package build process
 *-Ex.R
 
-# Output files from R CMD build
+# R CMD build/check output
 /*.tar.gz
-
-# Output files from R CMD check
 /*.Rcheck/
 
-# RStudio files
-.Rproj.user/
-
-# produced vignettes
+# Produced vignettes
 vignettes/*.html
 vignettes/*.pdf
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
+# OAuth2 token
 .httr-oauth
 
-# knitr and R markdown default cache directories
+# RStudio Connect
+rsconnect/
+
+
+# ============================================================
+# Quarto / R Markdown
+# ============================================================
+
+# Cache
 *_cache/
 /cache/
+.quarto/
+.quarto_cache/
 
-# Temporary files created by R markdown
+# Temporary files
 *.utf8.md
 *.knit.md
 
-# R Environment Variables
-.Renviron
-
-# pkgdown site
-docs/
-
-# translation temp files
-po/*~
-
-# RStudio Connect folder
-rsconnect/
-# macOS
-.DS_Store
-
-# RStudio / R
-.Rproj.user/
-.Rhistory
-.RData
-
-# Quarto / RMarkdown output
+# Rendered output
 *.html
 *.pdf
 *_files/
 **/*_files/
-.quarto/
-.quarto_cache/
 
-# Figures / plots
-*.png
-*.jpg
-*.jpeg
+# pkgdown site
+docs/
 
-# Data (keep OUT of git unless you intentionally commit small examples)
+
+# ============================================================
+# Data
+# ============================================================
+
+# Keep data out of Git unless intentionally committing examples
 *.rds
 *.csv
 *.xlsx
 *.sav
 *.dta
 
-# Word
+
+# ============================================================
+# Figures / plots
+# ============================================================
+
+*.png
+*.jpg
+*.jpeg
+
+
+# ============================================================
+# Documents
+# ============================================================
+
 *.docx
 
 
+# ============================================================
+# macOS / Posit
+# ============================================================
+
+.DS_Store
 .positai
+
+# Translation temporary files
+po/*~
