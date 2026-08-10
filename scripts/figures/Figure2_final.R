@@ -183,5 +183,5 @@ ggplot(plot_df, aes(x = x_label, y = estimate, group = identity,
     legend.position    = "top",
     panel.grid.minor   = element_blank(),
     panel.grid.major.x = element_blank(),
-    plot.caption       = element_text(size = 8, colour = "grey35")
+    plot.caption       = element_text(size = 8, colour = "grey35", hjust = 0)
   )
