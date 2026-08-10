@@ -1,0 +1,1163 @@
+---
+title: "Online Appendix: Descriptive Statistics"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    toc-location: left
+    theme: cosmo
+    embed-resources: true
+    echo: false
+    warning: false
+    message: false
+    fig-width: 8
+    fig-height: 5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# D1. Main Depedent and Indepedent Variables (all models)
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(haven)
+library(purrr)
+library(kableExtra)
+
+df <- readRDS("~/Library/CloudStorage/OneDrive-UniversityofGlasgow/BES/BES/BES_subset_panel_full_v5_England.rds")
+```
+
+```{r helpers, include=FALSE}
+# ── Generic helpers ───────────────────────────────────────────────────────────
+get_wave_num <- function(x) as.integer(str_extract(x, "\\d+$"))
+
+waves_available <- function(df, base) {
+  vars <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  sort(unique(map_int(vars, get_wave_num)))
+}
+
+# Pivot a single variable to long, returning id / wave / value
+pivot_var <- function(df, base) {
+  waves <- waves_available(df, base)
+  cols  <- paste0(base, "W", waves)
+  df |>
+    select(id, all_of(cols)) |>
+    mutate(across(all_of(cols), ~ as.numeric(zap_labels(.x)))) |>
+    pivot_longer(
+      cols      = all_of(cols),
+      names_to  = "wave",
+      values_to = "value",
+      names_pattern = paste0(base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave)) |>
+    filter(!is.na(value))
+}
+
+# Summarise a long variable tibble into one descriptive row
+desc_row <- function(long_df, label, valid_range = NULL) {
+  x <- long_df$value
+  if (!is.null(valid_range)) x <- x[x >= valid_range[1] & x <= valid_range[2]]
+  tibble(
+    Variable     = label,
+    Mean         = mean(x, na.rm = TRUE),
+    SD           = sd(x,   na.rm = TRUE),
+    Min          = min(x,  na.rm = TRUE),
+    Max          = max(x,  na.rm = TRUE),
+    Observations = length(x),
+    Respondents  = n_distinct(long_df$id[
+      if (!is.null(valid_range))
+        long_df$value >= valid_range[1] & long_df$value <= valid_range[2]
+      else
+        rep(TRUE, nrow(long_df))
+    ])
+  )
+}
+```
+
+```{r main-vars-table}
+# ── Variable definitions ──────────────────────────────────────────────────────
+vars <- list(
+  list(base = "immigSelf",     label = "Immigration self-placement (1–10)", range = c(0, 10)),
+  list(base = "immigEcon",     label = "Immigration: economic impact (1–7)",  range = c(1, 7)),
+  list(base = "immigCultural", label = "Immigration: cultural impact (1–7)",  range = c(1, 7)),
+  list(base = "britishness",   label = "Britishness (1–7)",                   range = c(1, 7)),
+  list(base = "englishness",   label = "Englishness (1–7)",                   range = c(1, 7))
+)
+
+desc_tbl <- map_dfr(vars, function(v) {
+  long <- pivot_var(df, v$base)
+  desc_row(long, v$label, valid_range = v$range)
+})
+
+desc_tbl |>
+  mutate(
+    Mean         = round(Mean, 3),
+    SD           = round(SD,   3),
+    Min          = round(Min,  0),
+    Max          = round(Max,  0),
+    Observations = formatC(Observations, format = "d", big.mark = ","),
+    Respondents  = formatC(Respondents,  format = "d", big.mark = ",")
+  ) |>
+  kbl(
+    caption = "Table D1. Descriptive Statistics: Main Dependent and Independent Variables",
+    align   = c("l", "r", "r", "r", "r", "r", "r"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(full_width = FALSE, position = "left") |>
+  pack_rows("Dependent Variables", 1, 3) |>
+  pack_rows("National Identity (Key Predictors)", 4, 5) |>
+  footnote(
+    general = paste(
+      "Statistics computed over all valid person-wave observations.",
+      "immigSelf is coded so that higher values indicate more permissive immigration attitudes.",
+      "immigEcon and immigCultural are 7-point items coded so that higher values indicate",
+      "more positive evaluations of immigration's economic and cultural impact respectively.",
+      "Britishness and Englishness are 7-point items where higher values indicate",
+      "stronger national identification."
+    ),
+    general_title = "Notes:",
+    footnote_as_chunk = TRUE
+  )
+```
+
+```{r plot-helpers, include=FALSE}
+library(ggplot2)
+library(lubridate)
+
+# ── Shared theme ──────────────────────────────────────────────────────────────
+theme_bjps <- function() {
+  theme_minimal(base_size = 11) +
+    theme(
+      panel.grid.minor   = element_blank(),
+      panel.grid.major.x = element_blank(),
+      strip.text         = element_text(face = "bold", size = 10),
+      axis.title         = element_text(size = 10),
+      axis.text          = element_text(size = 9),
+      plot.title         = element_text(face = "bold", size = 12, hjust = 0),
+      plot.subtitle      = element_text(size = 10, colour = "grey40", hjust = 0),
+      plot.caption       = element_text(size = 8,  colour = "grey50", hjust = 0),
+      legend.position    = "bottom",
+      legend.title       = element_blank()
+    )
+}
+
+# Colour palette (colourblind-safe, 5 variables)
+VAR_COLOURS <- c(
+  "Immigration self-placement" = "#2166ac",
+  "Econ. immigration attitudes" = "#4dac26",
+  "Cultural immigration attitudes" = "#d01c8b",
+  "Britishness"  = "#b35806",
+  "Englishness"  = "#542788"
+)
+
+# ── Build long data for all five variables, with year ─────────────────────────
+build_plot_long <- function(df) {
+  
+  var_specs <- list(
+    list(base = "immigSelf",     label = "Immigration self-placement",     range = c(0, 10)),
+    list(base = "immigEcon",     label = "Econ. immigration attitudes",     range = c(1, 7)),
+    list(base = "immigCultural", label = "Cultural immigration attitudes", range = c(1, 7)),
+    list(base = "britishness",   label = "Britishness",                    range = c(1, 7)),
+    list(base = "englishness",   label = "Englishness",                    range = c(1, 7))
+  )
+  
+  map_dfr(var_specs, function(v) {
+    waves <- waves_available(df, v$base)
+    cols  <- paste0(v$base, "W", waves)
+    time_cols <- paste0("starttimeW", waves)
+    
+    # keep only time cols that exist
+    time_cols_exist <- time_cols[time_cols %in% names(df)]
+    waves_with_time <- as.integer(str_extract(time_cols_exist, "\\d+$"))
+    
+    df |>
+      select(id,
+             all_of(paste0(v$base, "W", waves_with_time)),
+             all_of(paste0("starttimeW", waves_with_time))) |>
+      mutate(across(
+        all_of(paste0(v$base, "W", waves_with_time)),
+        ~ as.numeric(zap_labels(.x))
+      )) |>
+      pivot_longer(
+        cols         = -id,
+        names_to     = c(".value", "wave"),
+        names_pattern = "(.+)W(\\d+)$"
+      ) |>
+      mutate(
+        wave  = as.integer(wave),
+        year  = year(coalesce(
+          suppressWarnings(ymd_hms(as.character(starttime), quiet = TRUE)),
+          suppressWarnings(ymd(as.character(starttime),     quiet = TRUE))
+        )),
+        value = as.numeric(.data[[v$base]])
+      ) |>
+      rename(value_raw = value) |>
+      mutate(
+        value = case_when(
+          value_raw >= v$range[1] & value_raw <= v$range[2] ~ value_raw,
+          TRUE ~ NA_real_
+        ),
+        variable = v$label,
+        scale    = paste0(v$range[1], "–", v$range[2])
+      ) |>
+      filter(!is.na(value), !is.na(wave)) |>
+      select(id, wave, year, variable, scale, value)
+  })
+}
+
+plot_long <- build_plot_long(df)
+```
+
+```{r histograms, fig.cap="Figure D1. Distribution of main dependent and independent variables (pooled person-wave observations).", fig.height=7, fig.width=9}
+
+# ── Panel labels with scale annotation ───────────────────────────────────────
+plot_long <- plot_long |>
+  mutate(
+    var_label = case_when(
+      variable == "Immigration self-placement"     ~ "Immigration\nself-placement (0–10)",
+      variable == "Econ. immigration attitudes"     ~ "Economic immigration\nattitudes (1–7)",
+      variable == "Cultural immigration attitudes" ~ "Cultural immigration\nattitudes (1–7)",
+      variable == "Britishness"                    ~ "Britishness (1–7)",
+      variable == "Englishness"                    ~ "Englishness (1–7)"
+    ),
+    # preserve panel order
+    var_label = factor(var_label, levels = c(
+      "Immigration\nself-placement (0–10)",
+      "Economic immigration\nattitudes (1–7)",
+      "Cultural immigration\nattitudes (1–7)",
+      "Britishness (1–7)",
+      "Englishness (1–7)"
+    )),
+    group = if_else(
+      variable %in% c("Britishness", "Englishness"),
+      "National Identity", "Immigration Attitudes"
+    )
+  )
+
+ggplot(plot_long, aes(x = value, fill = variable, colour = variable)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth = 1,
+    boundary = 0.5,
+    alpha    = 0.75,
+    linewidth = 0.3
+  ) +
+  geom_vline(
+    data = plot_long |>
+      group_by(var_label) |>
+      summarise(m = mean(value), .groups = "drop"),
+    aes(xintercept = m),
+    colour    = "grey20",
+    linetype  = "dashed",
+    linewidth = 0.5
+  ) +
+  scale_fill_manual(values   = VAR_COLOURS, guide = "none") +
+  scale_colour_manual(values = VAR_COLOURS, guide = "none") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~ var_label, scales = "free_x", ncol = 3) +
+  labs(
+    x       = "Response value",
+    y       = "Density",
+    caption = "Dashed line indicates the sample mean. Pooled person-wave observations; valid responses only."
+  ) +
+  theme_bjps()
+```
+
+```{r wave-means, fig.cap="Figure D2. Wave-specific means of main variables over time. Points show the sample mean; ribbons show ±1 SD. Dashed vertical lines mark key economic events.", fig.height=7, fig.width=10}
+
+# ── Wave-level means and SDs ──────────────────────────────────────────────────
+wave_means <- plot_long |>
+  group_by(variable, var_label, wave, year) |>
+  summarise(
+    mean_val = mean(value),
+    sd_val   = sd(value),
+    n        = n(),
+    se       = sd_val / sqrt(n),
+    .groups  = "drop"
+  ) |>
+  filter(!is.na(year))
+
+# Key economic events to annotate (adjust years to match your wave calendar)
+events <- tibble(
+  year  = c(2016, 2020, 2021, 2022),
+  label = c("Brexit\nreferendum", "COVID-19\nonset", "Post-pandemic\nrecovery", "Cost-of-living\ncrisis")
+)
+
+ggplot(wave_means,
+       aes(x = year, y = mean_val,
+           colour = variable, fill = variable)) +
+  geom_ribbon(
+    aes(ymin = mean_val - sd_val,
+        ymax = mean_val + sd_val),
+    alpha     = 0.10,
+    colour    = NA
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.2, shape = 21,
+             colour = "white", stroke = 1.2,
+             aes(fill = variable)) +
+  geom_vline(
+    data        = events,
+    aes(xintercept = year),
+    colour      = "grey50",
+    linetype    = "dashed",
+    linewidth   = 0.4,
+    inherit.aes = FALSE
+  ) +
+  geom_text(
+    data        = events,
+    aes(x = year, y = Inf, label = label),
+    angle       = 90,
+    vjust       = 1.3,
+    hjust       = 1.1,
+    size        = 2.8,
+    colour      = "grey40",
+    inherit.aes = FALSE
+  ) +
+  scale_colour_manual(values = VAR_COLOURS) +
+  scale_fill_manual(values   = VAR_COLOURS) +
+  scale_x_continuous(breaks  = scales::pretty_breaks(n = 6)) +
+  facet_wrap(~ var_label, scales = "free_y", ncol = 3) +
+  labs(
+    x       = NULL,
+    y       = "Mean (±1 SD)",
+    caption = paste(
+      "Points are wave-level means; shaded bands are ±1 SD.",
+      "Dashed lines mark key economic and political events.",
+      "Valid person-wave observations only."
+    )
+  ) +
+  theme_bjps() +
+  theme(legend.position = "none")
+```
+
+```{r respondent-counts, fig.cap="Figure D3. Number of valid respondents per wave, by variable.", fig.height=4, fig.width=9}
+
+# ── Sample size by wave — useful reviewer sanity check ────────────────────────
+wave_n <- plot_long |>
+  group_by(variable, var_label, wave, year) |>
+  summarise(respondents = n_distinct(id), .groups = "drop") |>
+  filter(!is.na(year))
+
+ggplot(wave_n,
+       aes(x = year, y = respondents,
+           colour = variable, group = variable)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  scale_colour_manual(values = VAR_COLOURS) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  labs(
+    x       = NULL,
+    y       = "Unique respondents",
+    colour  = NULL,
+    caption = "Valid observations per wave; unbalanced panel structure visible across variables."
+  ) +
+  theme_bjps() +
+  theme(legend.position = "bottom")
+```
+
+## D2. Micro-Level Economic Variables
+
+```{r desc-micro}
+# income is stored as continuous equivalised weekly HH income (GBP)
+# riskUnemployment is 0-10 scale
+
+micro_vars <- list(
+  list(base  = "income",
+       label = "Equivalised household income (GBP/week)",
+       range = NULL),          # continuous, no discrete range filter
+  list(base  = "riskUnemployment",
+       label = "Perceived unemployment risk (0–10)",
+       range = c(0, 10))
+)
+
+desc_micro <- map_dfr(micro_vars, function(v) {
+  long <- pivot_var(df, v$base)
+  desc_row(long, v$label, valid_range = v$range)
+})
+
+desc_micro |>
+  mutate(
+    Mean         = round(Mean, 2),
+    SD           = round(SD,   2),
+    Min          = round(Min,  2),
+    Max          = round(Max,  2),
+    Observations = formatC(Observations, format = "d", big.mark = ","),
+    Respondents  = formatC(Respondents,  format = "d", big.mark = ",")
+  ) |>
+  kbl(
+    caption  = "Table D2. Descriptive Statistics: Micro-Level Economic Variables",
+    align    = c("l", "r", "r", "r", "r", "r", "r"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(full_width = FALSE, position = "left") |>
+  pack_rows("Individual Economic Conditions", 1, 2) |>
+  footnote(
+    general = paste(
+      "Equivalised household income is a continuous measure constructed under the",
+      "OECD-modified equivalence scale (child weight = 0.3) and expressed in GBP per week.",
+      "Perceived unemployment risk is a self-reported 0–10 scale where higher values",
+      "indicate greater perceived likelihood of job loss.",
+      "Observations differ across variables due to wave-varying item availability."
+    ),
+    general_title     = "Notes:",
+    footnote_as_chunk = TRUE
+  )
+```
+
+```{r hist-micro, fig.cap="Figure D4. Distribution of micro-level economic variables (pooled person-wave observations).", fig.height=4, fig.width=9}
+
+MICRO_COLOURS <- c(
+  "Equivalised household income (GBP/week)" = "#1b7837",
+  "Perceived unemployment risk (0–10)"      = "#762a83"
+)
+
+micro_long <- map_dfr(micro_vars, function(v) {
+  long <- pivot_var(df, v$base)
+  if (!is.null(v$range)) {
+    long <- long |> filter(value >= v$range[1], value <= v$range[2])
+  }
+  long |> mutate(variable = v$label)
+}) |>
+  left_join(
+    # attach year via starttime
+    map_dfr(waves_available(df, "starttime"), function(w) {
+      col <- paste0("starttimeW", w)
+      if (!col %in% names(df)) return(NULL)
+      df |>
+        select(id, all_of(col)) |>
+        mutate(
+          wave = w,
+          year = year(coalesce(
+            suppressWarnings(ymd_hms(as.character(.data[[col]]), quiet = TRUE)),
+            suppressWarnings(ymd(as.character(.data[[col]]),     quiet = TRUE))
+          ))
+        ) |>
+        select(id, wave, year)
+    }),
+    by = c("id", "wave")
+  ) |>
+  mutate(
+    var_label = case_when(
+      variable == "Equivalised household income (GBP/week)" ~
+        "Equivalised household\nincome (GBP/week)",
+      variable == "Perceived unemployment risk (0–10)" ~
+        "Perceived unemployment\nrisk (0–10)"
+    ),
+    var_label = factor(var_label, levels = c(
+      "Equivalised household\nincome (GBP/week)",
+      "Perceived unemployment\nrisk (0–10)"
+    ))
+  )
+
+# binwidth differs: continuous income needs wider bins than 0-10 risk scale
+bw_map <- c(
+  "Equivalised household\nincome (GBP/week)" = 10,
+  "Perceived unemployment\nrisk (0–10)"      = 1
+)
+
+ggplot(micro_long, aes(x = value, fill = variable, colour = variable)) +
+  geom_histogram(
+    aes(y = after_stat(density),
+        binwidth = bw_map[as.character(var_label)]),
+    alpha     = 0.75,
+    linewidth = 0.3
+  ) +
+  geom_vline(
+    data = micro_long |>
+      group_by(var_label) |>
+      summarise(m = mean(value, na.rm = TRUE), .groups = "drop"),
+    aes(xintercept = m),
+    colour    = "grey20",
+    linetype  = "dashed",
+    linewidth = 0.5
+  ) +
+  scale_fill_manual(values   = MICRO_COLOURS, guide = "none") +
+  scale_colour_manual(values = MICRO_COLOURS, guide = "none") +
+  scale_y_continuous(labels  = scales::percent_format()) +
+  facet_wrap(~ var_label, scales = "free", ncol = 2) +
+  labs(
+    x       = "Value",
+    y       = "Density",
+    caption = "Dashed line indicates the sample mean. Pooled person-wave observations; valid responses only."
+  ) +
+  theme_bjps()
+```
+
+```{r wave-means-micro, fig.cap="Figure D5. Wave-specific means of micro-level economic variables over time. Points show the sample mean; ribbons show ±1 SD.", fig.height=4, fig.width=10}
+
+wave_means_micro <- micro_long |>
+  filter(!is.na(year)) |>
+  group_by(variable, var_label, wave, year) |>
+  summarise(
+    mean_val = mean(value,  na.rm = TRUE),
+    sd_val   = sd(value,    na.rm = TRUE),
+    n        = n(),
+    .groups  = "drop"
+  )
+
+ggplot(wave_means_micro,
+       aes(x = year, y = mean_val,
+           colour = variable, fill = variable)) +
+  geom_ribbon(
+    aes(ymin = mean_val - sd_val,
+        ymax = mean_val + sd_val),
+    alpha   = 0.10,
+    colour  = NA
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.2, shape = 21,
+             colour = "white", stroke = 1.2,
+             aes(fill = variable)) +
+  geom_vline(
+    data        = events,
+    aes(xintercept = year),
+    colour      = "grey50",
+    linetype    = "dashed",
+    linewidth   = 0.4,
+    inherit.aes = FALSE
+  ) +
+  geom_text(
+    data        = events,
+    aes(x = year, y = Inf, label = label),
+    angle       = 90,
+    vjust       = 1.3,
+    hjust       = 1.1,
+    size        = 2.8,
+    colour      = "grey40",
+    inherit.aes = FALSE
+  ) +
+  scale_colour_manual(values = MICRO_COLOURS) +
+  scale_fill_manual(values   = MICRO_COLOURS) +
+  scale_x_continuous(breaks  = scales::pretty_breaks(n = 6)) +
+  facet_wrap(~ var_label, scales = "free_y", ncol = 2) +
+  labs(
+    x       = NULL,
+    y       = "Mean (±1 SD)",
+    caption = paste(
+      "Points are wave-level means; shaded bands are ±1 SD.",
+      "Dashed lines mark key economic and political events.",
+      "Valid person-wave observations only."
+    )
+  ) +
+  theme_bjps() +
+  theme(legend.position = "none")
+```
+
+```{r respondents-micro, fig.cap="Figure D6. Number of valid respondents per wave for micro-level economic variables.", fig.height=3.5, fig.width=8}
+
+wave_n_micro <- micro_long |>
+  filter(!is.na(year)) |>
+  group_by(variable, var_label, wave, year) |>
+  summarise(respondents = n_distinct(id), .groups = "drop")
+
+ggplot(wave_n_micro,
+       aes(x = year, y = respondents,
+           colour = variable, group = variable)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  scale_colour_manual(values = MICRO_COLOURS) +
+  scale_y_continuous(labels  = scales::comma) +
+  scale_x_continuous(breaks  = scales::pretty_breaks(n = 6)) +
+  labs(
+    x       = NULL,
+    y       = "Unique respondents",
+    colour  = NULL,
+    caption = paste(
+      "Valid observations per wave. The unbalanced panel structure",
+      "is visible in the differential wave coverage across variables."
+    )
+  ) +
+  theme_bjps() +
+  theme(legend.position = "bottom")
+```
+
+## D3. Meso-Level Economic Variables (Local Authority)
+
+```{r setup-meso, include=FALSE}
+library(sf)
+library(scales)
+
+# ── Meso variable specs ───────────────────────────────────────────────────────
+meso_vars <- list(
+  list(base  = "unemployment_rate",
+       label = "LA unemployment rate (%)",
+       range = c(0, 30)),          # APS unemployment rate, plausible ceiling
+  list(base  = "claimant_rate",
+       label = "LA claimant rate (% aged 16–64)",
+       range = c(0, 25)),          # claimant_rate_16_64 plausible ceiling
+  list(base  = "earnings_median",
+       label = "LA median weekly earnings (GBP)",
+       range = NULL)               # continuous, no ceiling needed
+)
+
+MESO_COLOURS <- c(
+  "LA unemployment rate (%)"            = "#d6604d",
+  "LA claimant rate (% aged 16–64)"     = "#4393c3",
+  "LA median weekly earnings (GBP)"     = "#4dac26"
+)
+
+# ── Helper: pivot one meso variable to LA × wave long ─────────────────────────
+pivot_meso_var <- function(df, base, valid_range = NULL) {
+  cols  <- names(df)[str_detect(names(df), paste0("^", base, "W\\d+$"))]
+  waves <- as.integer(str_extract(cols, "\\d+$"))
+
+  out <- df |>
+    select(id, oslaua = any_of(paste0("oslauaW", waves[1])),
+           all_of(cols)) |>
+    pivot_longer(
+      cols         = all_of(cols),
+      names_to     = "wave",
+      values_to    = "value",
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(wave = as.integer(wave),
+           value = as.numeric(value))
+
+  if (!is.null(valid_range)) {
+    out <- out |>
+      mutate(value = if_else(
+        value >= valid_range[1] & value <= valid_range[2],
+        value, NA_real_
+      ))
+  }
+  out |> filter(!is.na(value))
+}
+
+# ── Helper: attach fieldwork year to long meso panel ─────────────────────────
+attach_year_meso <- function(long_df, df) {
+  time_df <- map_dfr(sort(unique(long_df$wave)), function(w) {
+    col <- paste0("starttimeW", w)
+    if (!col %in% names(df)) return(NULL)
+    df |>
+      select(id, all_of(col)) |>
+      mutate(
+        wave = w,
+        year = year(coalesce(
+          suppressWarnings(ymd_hms(as.character(.data[[col]]), quiet = TRUE)),
+          suppressWarnings(ymd(as.character(.data[[col]]),     quiet = TRUE))
+        ))
+      ) |>
+      select(id, wave, year)
+  })
+  long_df |> left_join(time_df, by = c("id", "wave"))
+}
+
+# ── Helper: attach LA code (oslaua) across waves ──────────────────────────────
+attach_la_code <- function(long_df, df) {
+  la_cols <- names(df)[str_detect(names(df), "^oslauaW\\d+$")]
+  la_long <- df |>
+    select(id, all_of(la_cols)) |>
+    mutate(id = as.character(id)) |>
+    pivot_longer(
+      cols         = all_of(la_cols),
+      names_to     = "wave",
+      values_to    = "la_code",
+      names_pattern = "^oslauaW(\\d+)$"
+    ) |>
+    mutate(wave    = as.integer(wave),
+           la_code = as.character(la_code)) |>
+    filter(!is.na(la_code), la_code != "")
+
+  long_df |>
+    mutate(id = as.character(id)) |>
+    left_join(la_long, by = c("id", "wave"))
+}
+```
+
+```{r build-meso-long, include=FALSE}
+# Build full long panel for all three meso variables
+meso_long <- map_dfr(meso_vars, function(v) {
+  pivot_meso_var(df, v$base, v$range) |>
+    attach_year_meso(df) |>
+    attach_la_code(df) |>
+    mutate(variable = v$label)
+}) |>
+  mutate(
+    var_label = factor(variable, levels = map_chr(meso_vars, "label"))
+  )
+
+# LA × year panel (deduplicated — one value per LA per year per variable)
+la_year_panel <- meso_long |>
+  filter(!is.na(la_code), !is.na(year)) |>
+  group_by(variable, var_label, la_code, year) |>
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+```
+
+```{r desc-meso}
+# ── Table D3: Summary stats at LA × year level ────────────────────────────────
+desc_meso <- la_year_panel |>
+  group_by(variable) |>
+  summarise(
+    Mean          = round(mean(value,   na.rm = TRUE), 2),
+    SD            = round(sd(value,     na.rm = TRUE), 2),
+    Min           = round(min(value,    na.rm = TRUE), 2),
+    Max           = round(max(value,    na.rm = TRUE), 2),
+    `LA × Years`  = formatC(n(),                       format = "d", big.mark = ","),
+    `Unique LAs`  = formatC(n_distinct(la_code),       format = "d", big.mark = ","),
+    `Years`       = paste0(min(year), "–", max(year)),
+    .groups = "drop"
+  ) |>
+  rename(Variable = variable)
+
+desc_meso |>
+  kbl(
+    caption  = "Table D3. Descriptive Statistics: Meso-Level Economic Variables (LA × Year)",
+    align    = c("l", "r", "r", "r", "r", "r", "r", "r"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(full_width = FALSE, position = "left") |>
+  pack_rows("Local Authority Economic Conditions", 1, 3) |>
+  footnote(
+    general = paste(
+      "Statistics computed at the local authority × year level.",
+      "Unemployment rate: APS model-based estimates (Jan–Dec annual averages).",
+      "Claimant rate: ONS claimant count as % of residents aged 16–64",
+      "(monthly records averaged to annual LA-level values).",
+      "Median weekly earnings: ASHE place-of-residence estimates, all employees.",
+      "All variables sourced from ONS and merged to the BES panel",
+      "by LAD21CD local authority code and fieldwork year."
+    ),
+    general_title     = "Notes:",
+    footnote_as_chunk = TRUE
+  )
+```
+
+```{r temporal-meso, fig.cap="Figure D7. Temporal evolution of LA-level economic variables (2014–2024). Lines show the cross-LA mean; shaded bands show the interquartile range across local authorities. Dashed vertical lines mark key economic events.", fig.height=5, fig.width=11}
+
+# ── Year-level summary: mean + IQR across LAs ────────────────────────────────
+year_summary <- la_year_panel |>
+  filter(!is.na(year)) |>
+  group_by(variable, var_label, year) |>
+  summarise(
+    mean_val = mean(value,                      na.rm = TRUE),
+    p25      = quantile(value, 0.25,            na.rm = TRUE),
+    p75      = quantile(value, 0.75,            na.rm = TRUE),
+    n_la     = n_distinct(la_code),
+    .groups  = "drop"
+  )
+
+ggplot(year_summary,
+       aes(x = year, y = mean_val,
+           colour = variable, fill = variable)) +
+  geom_ribbon(
+    aes(ymin = p25, ymax = p75),
+    alpha  = 0.15,
+    colour = NA
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.3, shape = 21,
+             colour = "white", stroke = 1.2,
+             aes(fill = variable)) +
+  geom_vline(
+    data        = events,
+    aes(xintercept = year),
+    colour      = "grey50",
+    linetype    = "dashed",
+    linewidth   = 0.4,
+    inherit.aes = FALSE
+  ) +
+  geom_text(
+    data        = events,
+    aes(x = year, y = Inf, label = label),
+    angle       = 90,
+    vjust       = 1.3,
+    hjust       = 1.1,
+    size        = 2.8,
+    colour      = "grey40",
+    inherit.aes = FALSE
+  ) +
+  scale_colour_manual(values = MESO_COLOURS, guide = "none") +
+  scale_fill_manual(values   = MESO_COLOURS, guide = "none") +
+  scale_x_continuous(breaks  = scales::pretty_breaks(n = 6)) +
+  facet_wrap(~ var_label, scales = "free_y", ncol = 3) +
+  labs(
+    x       = NULL,
+    y       = "Value (cross-LA mean)",
+    caption = paste(
+      "Lines show the cross-LA mean; shaded bands show the interquartile range (P25–P75) across local authorities.",
+      "Dashed lines mark key economic and political events.",
+      "Valid LA × year observations only."
+    )
+  ) +
+  theme_bjps()
+```
+
+```{r maps-meso, fig.cap="Figure D8. Spatial distribution of LA-level economic variables: 2019 (pre-COVID) and 2022 (cost-of-living crisis). Boundaries: ONS LAD 2021, England.", fig.height=10, fig.width=11}
+
+#| label: maps-meso
+#| fig-cap: "Figure D8. Spatial distribution of LA-level economic variables: 2019 (pre-COVID) and 2022 (cost-of-living crisis). Boundaries: ONS LAD 2021, England."
+#| fig-height: 10
+#| fig-width: 11
+
+library(sf)
+library(patchwork)
+
+# ── Load LAD 2021 boundaries ─────────────────────────────────────────────────
+# Install once if needed:
+# remotes::install_github("best-practice-and-impact/geographr")
+
+library(geographr)
+
+la_sf <- geographr::boundaries_ltla21 |>
+  rename(
+    la_code = ltla21_code,
+    la_name = ltla21_name
+  ) |>
+  mutate(
+    la_code = as.character(la_code)
+  ) |>
+  filter(substr(la_code, 1, 1) == "E")
+
+# ── Snapshot years: 2019 and 2022 ────────────────────────────────────────────
+snap_years <- c(2019, 2022)
+
+map_data <- la_year_panel |>
+  filter(year %in% snap_years) |>
+  mutate(
+    la_code    = as.character(la_code),
+    year_label = paste0(year)
+  )
+
+map_sf <- la_sf |>
+  left_join(map_data, by = "la_code")
+
+# ── One panel per variable × year ────────────────────────────────────────────
+var_list <- map_chr(meso_vars, "label")
+
+map_plots <- map(var_list, function(vlab) {
+  
+  map_sf |>
+    filter(variable == vlab) |>
+    ggplot() +
+    geom_sf(aes(fill = value), colour = NA, linewidth = 0) +
+    scale_fill_distiller(
+      palette   = "RdYlBu",
+      direction = if (vlab == "LA median weekly earnings (GBP)") 1 else -1,
+      na.value  = "grey85",
+      name      = vlab,
+      labels    = scales::comma
+    ) +
+    facet_wrap(~ year_label, ncol = 2) +
+    labs(title = vlab) +
+    theme_void(base_size = 9) +
+    theme(
+      plot.title       = element_text(face = "bold", size = 10, hjust = 0.5),
+      legend.position  = "bottom",
+      legend.title     = element_blank(),
+      legend.key.width = unit(1.8, "cm"),
+      strip.text       = element_text(face = "bold", size = 9)
+    )
+})
+
+# ── Stack the three variable panels vertically ───────────────────────────────
+map_plots[[1]] / map_plots[[2]] / map_plots[[3]] +
+  plot_annotation(
+    caption = paste(
+      "Source: ONS APS (unemployment), ONS Claimant Count, ASHE (earnings).",
+      "Boundaries: ONS Local Authority Districts, December 2021 (generalised).",
+      "Colour direction: red = higher unemployment/claimant rate; blue = higher earnings."
+    ),
+    theme = theme(
+      plot.caption = element_text(size = 7.5, colour = "grey50")
+    )
+  )
+```
+
+## D4. Macro-Level Economic Variables (England)
+
+```{r setup-meso, include=FALSE}
+#| label: setup-macro-desc
+#| include: false
+
+library(scales)
+
+# ── Macro variable specs ──────────────────────────────────────────────────────
+macro_vars <- list(
+  list(
+    base  = "unempl_rate",
+    label = "National unemployment rate (%)",
+    range = c(0, 30)
+  ),
+  list(
+    base  = "claimant_k",
+    label = "National claimant count (thousands)",
+    range = NULL
+  ),
+  list(
+    base  = "gdp_pc",
+    label = "GDP per capita (GBP)",
+    range = NULL
+  ),
+  list(
+    base  = "cpih_rate",
+    label = "CPIH inflation rate (%)",
+    range = NULL
+  )
+)
+
+MACRO_COLOURS <- c(
+  "National unemployment rate (%)"       = "#d6604d",
+  "National claimant count (thousands)"  = "#4393c3",
+  "GDP per capita (GBP)"                 = "#4dac26",
+  "CPIH inflation rate (%)"              = "#9970ab"
+)
+
+# ── Helper: pivot one macro variable to respondent × wave long ────────────────
+pivot_macro_var <- function(df, base, valid_range = NULL) {
+
+  cols <- names(df)[
+    str_detect(names(df), paste0("^", base, "W\\d+$"))
+  ]
+
+  out <- df |>
+    select(id, all_of(cols)) |>
+    pivot_longer(
+      cols          = all_of(cols),
+      names_to      = "wave",
+      values_to     = "value",
+      names_pattern = paste0("^", base, "W(\\d+)$")
+    ) |>
+    mutate(
+      wave  = as.integer(wave),
+      value = as.numeric(value)
+    )
+
+  if (!is.null(valid_range)) {
+    out <- out |>
+      mutate(
+        value = if_else(
+          value >= valid_range[1] & value <= valid_range[2],
+          value,
+          NA_real_
+        )
+      )
+  }
+
+  out |>
+    filter(!is.na(value))
+}
+
+
+# ── Helper: attach fieldwork year to long macro panel ─────────────────────────
+attach_year_macro <- function(long_df, df) {
+
+  time_df <- map_dfr(
+    sort(unique(long_df$wave)),
+    function(w) {
+
+      col <- paste0("starttimeW", w)
+
+      if (!col %in% names(df)) return(NULL)
+
+      df |>
+        select(id, all_of(col)) |>
+        mutate(
+          wave = w,
+          year = year(
+            coalesce(
+              suppressWarnings(
+                ymd_hms(as.character(.data[[col]]), quiet = TRUE)
+              ),
+              suppressWarnings(
+                ymd(as.character(.data[[col]]), quiet = TRUE)
+              )
+            )
+          )
+        ) |>
+        select(id, wave, year)
+    }
+  )
+
+  long_df |>
+    left_join(time_df, by = c("id", "wave"))
+}
+
+```
+
+```{r build-macro-long, include=FALSE}
+#| label: build-macro-long
+#| include: false
+
+# Build full long panel for all four macro variables
+macro_long <- map_dfr(macro_vars, function(v) {
+
+  pivot_macro_var(
+    df,
+    v$base,
+    v$range
+  ) |>
+    attach_year_macro(df) |>
+    mutate(variable = v$label)
+
+}) |>
+  mutate(
+    var_label = factor(
+      variable,
+      levels = map_chr(macro_vars, "label")
+    )
+  )
+
+
+# ── National × year panel ─────────────────────────────────────────────────────
+# Macro indicators are repeated across BES respondents.
+# Collapse to one national value per year per variable.
+
+national_year_panel <- macro_long |>
+  filter(!is.na(year)) |>
+  group_by(
+    variable,
+    var_label,
+    year
+  ) |>
+  summarise(
+    value = mean(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r desc-macro}
+#| label: desc-macro
+
+# ── Table D4: Summary stats at national × year level ──────────────────────────
+desc_macro <- national_year_panel |>
+  group_by(variable) |>
+  summarise(
+    Mean    = round(mean(value, na.rm = TRUE), 2),
+    SD      = round(sd(value,   na.rm = TRUE), 2),
+    Min     = round(min(value,  na.rm = TRUE), 2),
+    Max     = round(max(value,  na.rm = TRUE), 2),
+    `Years` = formatC(
+      n(),
+      format   = "d",
+      big.mark = ","
+    ),
+    `Period`  = paste0(
+      min(year),
+      "–",
+      max(year)
+    ),
+    .groups = "drop"
+  ) |>
+  rename(Variable = variable)
+
+
+desc_macro |>
+  kbl(
+    caption  = "Table D4. Descriptive Statistics: Macro-Level Economic Variables (National × Year)",
+    align    = c("l", "r", "r", "r", "r", "r", "r"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(
+    full_width = FALSE,
+    position   = "left"
+  ) |>
+  pack_rows(
+    "National Economic Conditions",
+    1,
+    4
+  ) |>
+  footnote(
+    
+    general = paste(
+      
+      "Statistics computed from the annual national macroeconomic series assigned to BES waves.",
+      "GDP per capita: ONS chained volume measure (CVM), market prices, per head, aggregated from quarterly observations to annual means.",
+      "Unemployment rate: seasonally adjusted ONS national unemployment rate, aggregated from quarterly observations to annual means.",
+      "Claimant Count: seasonally adjusted number of people claiming unemployment-related benefits, expressed in thousands, aggregated to annual values from the quarterly observations reported in the ONS series.",
+      "CPIH: ONS Consumer Prices Index including owner occupiers' housing costs, all items (2015 = 100), aggregated to annual values from the quarterly observations reported in the ONS series.",
+      "For each BES wave, annual macroeconomic values were assigned according to the median calendar year of wave fieldwork."
+      
+    ),
+    
+    general_title     = "Notes:",
+    
+    footnote_as_chunk = TRUE
+    
+  )
+```
+
+```{r temporal-macro, fig.cap="Figure D9. Temporal evolution of national macro-economic conditions", fig.height=6, fig.width=11}
+
+ggplot(
+  national_year_panel,
+  aes(
+    x      = year,
+    y      = value,
+    colour = variable
+  )
+) +
+  geom_line(linewidth = 0.9) +
+
+  geom_point(
+    size   = 2.3,
+    shape  = 21,
+    colour = "white",
+    stroke = 1.2,
+    aes(fill = variable)
+  ) +
+
+  geom_vline(
+    data        = events,
+    aes(xintercept = year),
+    colour      = "grey50",
+    linetype    = "dashed",
+    linewidth   = 0.4,
+    inherit.aes = FALSE
+  ) +
+
+  geom_text(
+    data        = events,
+    aes(
+      x     = year,
+      y     = Inf,
+      label = label
+    ),
+    angle       = 90,
+    vjust       = 1.3,
+    hjust       = 1.1,
+    size        = 2.8,
+    colour      = "grey40",
+    inherit.aes = FALSE
+  ) +
+
+  scale_colour_manual(
+    values = MACRO_COLOURS,
+    guide  = "none"
+  ) +
+
+  scale_fill_manual(
+    values = MACRO_COLOURS,
+    guide  = "none"
+  ) +
+
+  scale_x_continuous(
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+
+  facet_wrap(
+    ~ var_label,
+    scales = "free_y",
+    ncol   = 2
+  ) +
+
+  labs(
+    x       = NULL,
+    y       = "Value",
+    caption = paste(
+      "Lines show annual national economic conditions corresponding to BES fieldwork years.",
+      "Dashed lines mark key economic and political events.",
+      "Valid national × year observations only."
+    )
+  ) +
+
+  theme_bjps()
+
+```
